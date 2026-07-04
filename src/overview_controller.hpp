@@ -13,7 +13,6 @@
 
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
-#include <hyprland/src/desktop/rule/windowRule/WindowRuleEffectContainer.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
 #include <hyprland/src/devices/ITouch.hpp>
@@ -96,6 +95,7 @@ class OverviewController {
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
+    void                renderPassAddHook(void* renderPassThisptr, UP<IPassElement>&& element);
     void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
     [[nodiscard]] SDispatchResult fullscreenDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult fullscreenStateDispatcherHook(std::string args);
@@ -310,11 +310,6 @@ class OverviewController {
         std::string  name;
     };
 
-    struct HyprbarsOverviewHiddenWindow {
-        PHLWINDOWREF                                           window;
-        Desktop::Rule::CWindowRuleEffectContainer::storageType effect = Desktop::Rule::WINDOW_RULE_EFFECT_NONE;
-    };
-
     struct WorkspaceOverride {
         MONITORID    monitorId = MONITOR_INVALID;
         PHLWORKSPACE workspace;
@@ -402,6 +397,7 @@ class OverviewController {
     using SurfaceDrawFn = std::vector<UP<IPassElement>> (*)(void*);
     using SurfaceBlurNeedsFn = bool (*)(void*);
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
+    using RenderPassAddFn = void (*)(void*, UP<IPassElement>&&);
     using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
     using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
     using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
@@ -647,8 +643,7 @@ class OverviewController {
     void                       queuePostCloseDispatcher(PostCloseDispatcher dispatcher, std::string args);
     [[nodiscard]] SDispatchResult runHookedDispatcher(PostCloseDispatcher dispatcher, std::string args);
     void                       setFullscreenRenderOverride(bool suppress);
-    void                       syncHyprbarsOverviewHiddenWindows();
-    void                       clearHyprbarsOverviewHiddenWindows();
+    [[nodiscard]] bool         shouldSuppressHyprbarsPassElement(IPassElement* element) const;
 
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow = {},
                    const std::vector<WorkspaceOverride>& workspaceOverrides = {});
@@ -720,6 +715,7 @@ class OverviewController {
     CFunctionHook*            m_surfaceNeedsLiveBlurHook = nullptr;
     CFunctionHook*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
     CFunctionHook*            m_shouldRenderWindowHook = nullptr;
+    CFunctionHook*            m_renderPassAddHook = nullptr;
     CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
@@ -742,6 +738,7 @@ class OverviewController {
     SurfaceBlurNeedsFn        m_surfaceNeedsLiveBlurOriginal = nullptr;
     SurfaceBlurNeedsFn        m_surfaceNeedsPrecomputeBlurOriginal = nullptr;
     ShouldRenderWindowFn      m_shouldRenderWindowOriginal = nullptr;
+    RenderPassAddFn           m_renderPassAddOriginal = nullptr;
     RenderLayerFn             m_renderLayerOriginal = nullptr;
     BorderDrawFn              m_borderDrawOriginal = nullptr;
     BorderDrawFn              m_shadowDrawOriginal = nullptr;
@@ -807,7 +804,6 @@ class OverviewController {
     std::string               m_postCloseDispatcherArgs;
     std::vector<GestureRegistration> m_registeredGestures;
     std::vector<WorkspaceNameBackup> m_workspaceNameBackups;
-    std::vector<HyprbarsOverviewHiddenWindow> m_hyprbarsOverviewHiddenWindows;
     GestureSession            m_gestureSession;
     ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
