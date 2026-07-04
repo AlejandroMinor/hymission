@@ -1906,11 +1906,11 @@ void hkCalculateUVForSurface(void* rendererThisptr, PHLWINDOW window, SP<CWLSurf
     g_controller->calculateUVForSurfaceHook(window, std::move(surface), monitor, main, projSize, projSizeUnscaled, fixMisalignedFSV1);
 }
 
-void hkRenderPassAdd(void* renderPassThisptr, UP<IPassElement>&& element) {
+void hkRendererDrawElement(void* rendererThisptr, WP<IPassElement> element, const CRegion& damage) {
     if (!g_controller)
         return;
 
-    g_controller->renderPassAddHook(renderPassThisptr, std::move(element));
+    g_controller->rendererDrawElementHook(rendererThisptr, element, damage);
 }
 
 std::vector<UP<IPassElement>> hkSurfaceDraw(void* surfacePassThisptr) {
@@ -2076,8 +2076,8 @@ OverviewController::~OverviewController() {
         HyprlandAPI::removeFunctionHook(m_handle, m_surfaceNeedsPrecomputeBlurHook);
     if (m_shouldRenderWindowHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_shouldRenderWindowHook);
-    if (m_renderPassAddHook)
-        HyprlandAPI::removeFunctionHook(m_handle, m_renderPassAddHook);
+    if (m_rendererDrawElementHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_rendererDrawElementHook);
     if (m_borderDrawHook)
         HyprlandAPI::removeFunctionHook(m_handle, m_borderDrawHook);
     if (m_shadowDrawHook)
@@ -3361,14 +3361,14 @@ void OverviewController::calculateUVForSurfaceHook(const PHLWINDOW& window, SP<C
     m_calculateUVForSurfaceOriginal(g_pHyprRenderer.get(), window, std::move(surface), monitor, main, adjustedProjSize, adjustedProjSizeUnscaled, fixMisalignedFSV1);
 }
 
-void OverviewController::renderPassAddHook(void* renderPassThisptr, UP<IPassElement>&& element) {
-    if (!m_renderPassAddOriginal)
+void OverviewController::rendererDrawElementHook(void* rendererThisptr, WP<IPassElement> element, const CRegion& damage) {
+    if (!m_rendererDrawElementOriginal)
         return;
 
     if (shouldSuppressHyprbarsPassElement(element.get()))
         return;
 
-    m_renderPassAddOriginal(renderPassThisptr, std::move(element));
+    m_rendererDrawElementOriginal(rendererThisptr, element, damage);
 }
 
 SDispatchResult OverviewController::fullscreenDispatcherHook(std::string args) {
@@ -6197,10 +6197,11 @@ bool OverviewController::installHooks() {
     (void)hookFunction("renderLayer", std::vector<std::string>{"IHyprRenderer::renderLayer(", "CHyprRenderer::renderLayer("}, m_renderLayerHook,
                        reinterpret_cast<void*>(&hkRenderLayer));
 
-    if (!hookFunction("add", "Render::CRenderPass::add(", m_renderPassAddHook, reinterpret_cast<void*>(&hkRenderPassAdd))) {
-        notify("[hymission] failed to hook render pass add", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
+    (void)hookFunction("draw",
+                       std::vector<std::string>{
+                           "Render::IHyprRenderer::draw(Hyprutils::Memory::CWeakPointer<IPassElement>",
+                           "IHyprRenderer::draw(Hyprutils::Memory::CWeakPointer<IPassElement>"},
+                       m_rendererDrawElementHook, reinterpret_cast<void*>(&hkRendererDrawElement));
 
     if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, reinterpret_cast<void*>(&hkSurfaceTexBox))) {
         notify("[hymission] failed to hook getTexBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
@@ -6297,7 +6298,7 @@ bool OverviewController::installHooks() {
     m_borderDrawOriginal = nullptr;
     m_shadowDrawOriginal = nullptr;
     m_calculateUVForSurfaceOriginal = nullptr;
-    m_renderPassAddOriginal = nullptr;
+    m_rendererDrawElementOriginal = nullptr;
     m_renderLayerOriginal = nullptr;
     if (!m_changeWorkspaceDispatcherWrapped)
         m_changeWorkspaceOriginal = nullptr;
@@ -6329,19 +6330,17 @@ bool OverviewController::activateHooks() {
     if (m_hooksActive)
         return true;
 
-    if (!m_shouldRenderWindowHook || !m_renderPassAddHook || !m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook ||
+    if (!m_shouldRenderWindowHook || !m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook ||
         !m_surfaceDrawHook || !m_surfaceNeedsLiveBlurHook || !m_surfaceNeedsPrecomputeBlurHook || !m_borderDrawHook || !m_shadowDrawHook || !m_calculateUVForSurfaceHook)
         return false;
 
-    const bool hooked = m_shouldRenderWindowHook->hook() && m_renderPassAddHook->hook() && m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() &&
-        m_surfaceOpaqueRegionHook->hook() && m_surfaceVisibleRegionHook->hook() && m_surfaceDrawHook->hook() && m_surfaceNeedsLiveBlurHook->hook() &&
-        m_surfaceNeedsPrecomputeBlurHook->hook() && m_borderDrawHook->hook() && m_shadowDrawHook->hook() && m_calculateUVForSurfaceHook->hook();
+    const bool hooked = m_shouldRenderWindowHook->hook() && m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() && m_surfaceOpaqueRegionHook->hook() &&
+        m_surfaceVisibleRegionHook->hook() && m_surfaceDrawHook->hook() && m_surfaceNeedsLiveBlurHook->hook() && m_surfaceNeedsPrecomputeBlurHook->hook() &&
+        m_borderDrawHook->hook() && m_shadowDrawHook->hook() && m_calculateUVForSurfaceHook->hook();
     if (!hooked) {
         notify("[hymission] surface pass hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         if (m_shouldRenderWindowHook)
             m_shouldRenderWindowHook->unhook();
-        if (m_renderPassAddHook)
-            m_renderPassAddHook->unhook();
         if (m_surfaceTexBoxHook)
             m_surfaceTexBoxHook->unhook();
         if (m_surfaceBoundingBoxHook)
@@ -6376,7 +6375,17 @@ bool OverviewController::activateHooks() {
     m_borderDrawOriginal = reinterpret_cast<BorderDrawFn>(m_borderDrawHook->m_original);
     m_shadowDrawOriginal = reinterpret_cast<BorderDrawFn>(m_shadowDrawHook->m_original);
     m_calculateUVForSurfaceOriginal = reinterpret_cast<CalculateUVForSurfaceFn>(m_calculateUVForSurfaceHook->m_original);
-    m_renderPassAddOriginal = reinterpret_cast<RenderPassAddFn>(m_renderPassAddHook->m_original);
+    if (m_rendererDrawElementHook) {
+        if (m_rendererDrawElementHook->hook()) {
+            m_rendererDrawElementOriginal = reinterpret_cast<RendererDrawElementFn>(m_rendererDrawElementHook->m_original);
+        } else {
+            if (debugLogsEnabled())
+                debugLog("[hymission] optional hook activation failed: renderer draw element");
+            HyprlandAPI::removeFunctionHook(m_handle, m_rendererDrawElementHook);
+            m_rendererDrawElementHook = nullptr;
+            m_rendererDrawElementOriginal = nullptr;
+        }
+    }
     if (m_renderLayerHook) {
         if (m_renderLayerHook->hook()) {
             m_renderLayerOriginal = reinterpret_cast<RenderLayerFn>(m_renderLayerHook->m_original);
@@ -6398,8 +6407,8 @@ void OverviewController::deactivateHooks() {
 
     if (m_shouldRenderWindowHook)
         m_shouldRenderWindowHook->unhook();
-    if (m_renderPassAddHook)
-        m_renderPassAddHook->unhook();
+    if (m_rendererDrawElementHook)
+        m_rendererDrawElementHook->unhook();
     if (m_renderLayerHook)
         m_renderLayerHook->unhook();
     if (m_surfaceTexBoxHook)
@@ -6433,7 +6442,7 @@ void OverviewController::deactivateHooks() {
     m_borderDrawOriginal = nullptr;
     m_shadowDrawOriginal = nullptr;
     m_calculateUVForSurfaceOriginal = nullptr;
-    m_renderPassAddOriginal = nullptr;
+    m_rendererDrawElementOriginal = nullptr;
     m_renderLayerOriginal = nullptr;
     m_surfaceRenderDataTransformDepth = 0;
     m_hooksActive = false;

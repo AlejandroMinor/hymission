@@ -95,7 +95,7 @@ class OverviewController {
     void                shadowDrawHook(void* shadowDecorationThisptr, const PHLMONITOR& monitor, const float& alpha);
     void                calculateUVForSurfaceHook(const PHLWINDOW& window, SP<CWLSurfaceResource> surface, const PHLMONITOR& monitor, bool main, const Vector2D& projSize,
                                                   const Vector2D& projSizeUnscaled, bool fixMisalignedFSV1);
-    void                renderPassAddHook(void* renderPassThisptr, UP<IPassElement>&& element);
+    void                rendererDrawElementHook(void* rendererThisptr, WP<IPassElement> element, const CRegion& damage);
     void                renderLayerHook(void* rendererThisptr, PHLLS layer, PHLMONITOR monitor, const Time::steady_tp& now, bool popups, bool lockscreen);
     [[nodiscard]] SDispatchResult fullscreenDispatcherHook(std::string args);
     [[nodiscard]] SDispatchResult fullscreenStateDispatcherHook(std::string args);
@@ -397,7 +397,7 @@ class OverviewController {
     using SurfaceDrawFn = std::vector<UP<IPassElement>> (*)(void*);
     using SurfaceBlurNeedsFn = bool (*)(void*);
     using ShouldRenderWindowFn = bool (*)(void*, PHLWINDOW, PHLMONITOR);
-    using RenderPassAddFn = void (*)(void*, UP<IPassElement>&&);
+    using RendererDrawElementFn = void (*)(void*, WP<IPassElement>, const CRegion&);
     using RenderLayerFn = void (*)(void*, PHLLS, PHLMONITOR, const Time::steady_tp&, bool, bool);
     using BorderDrawFn = void (*)(void*, PHLMONITOR, const float&);
     using CalculateUVForSurfaceFn = void (*)(void*, PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR, bool, const Vector2D&, const Vector2D&, bool);
@@ -715,7 +715,7 @@ class OverviewController {
     CFunctionHook*            m_surfaceNeedsLiveBlurHook = nullptr;
     CFunctionHook*            m_surfaceNeedsPrecomputeBlurHook = nullptr;
     CFunctionHook*            m_shouldRenderWindowHook = nullptr;
-    CFunctionHook*            m_renderPassAddHook = nullptr;
+    CFunctionHook*            m_rendererDrawElementHook = nullptr;
     CFunctionHook*            m_renderLayerHook = nullptr;
     CFunctionHook*            m_borderDrawHook = nullptr;
     CFunctionHook*            m_shadowDrawHook = nullptr;
@@ -738,7 +738,7 @@ class OverviewController {
     SurfaceBlurNeedsFn        m_surfaceNeedsLiveBlurOriginal = nullptr;
     SurfaceBlurNeedsFn        m_surfaceNeedsPrecomputeBlurOriginal = nullptr;
     ShouldRenderWindowFn      m_shouldRenderWindowOriginal = nullptr;
-    RenderPassAddFn           m_renderPassAddOriginal = nullptr;
+    RendererDrawElementFn     m_rendererDrawElementOriginal = nullptr;
     RenderLayerFn             m_renderLayerOriginal = nullptr;
     BorderDrawFn              m_borderDrawOriginal = nullptr;
     BorderDrawFn              m_shadowDrawOriginal = nullptr;
