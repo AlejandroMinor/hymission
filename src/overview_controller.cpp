@@ -198,6 +198,9 @@ constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds
 constexpr auto   CAPTURE_INPUT_SUPPRESS_TIMEOUT = std::chrono::seconds(10);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
+constexpr auto   HYPRBARS_NO_BAR_EFFECT = "hyprbars:no_bar";
+constexpr auto   HYPRBARS_OVERVIEW_HIDE_EFFECT_VALUE = "1";
+using WindowRuleEffectStorage = Desktop::Rule::CWindowRuleEffectContainer::storageType;
 OverviewController* g_controller = nullptr;
 
 enum class GestureDispatcherKind : uint8_t {
@@ -267,6 +270,64 @@ void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWOR
         window->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(0.F);
         *window->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE) = 1.F;
     }
+}
+
+std::optional<WindowRuleEffectStorage> hyprbarsNoBarEffect() {
+    const auto effects = Desktop::Rule::windowEffects();
+    if (!effects)
+        return std::nullopt;
+
+    return effects->get(HYPRBARS_NO_BAR_EFFECT);
+}
+
+bool isHymissionHyprbarsOverviewNoBarProp(const UP<Desktop::Rule::CWindowRuleApplicator::SCustomPropContainer>& prop,
+                                          WindowRuleEffectStorage effect) {
+    return prop && prop->idx == effect && prop->propMask == Desktop::Rule::RULE_PROP_NONE && prop->effect == HYPRBARS_OVERVIEW_HIDE_EFFECT_VALUE;
+}
+
+void notifyHyprbarsOverviewNoBarChanged(const PHLWINDOW& window) {
+    if (!window)
+        return;
+
+    Event::bus()->m_events.window.updateRules.emit(window);
+    window->updateDecorationValues();
+
+    if (const auto monitor = window->m_monitor.lock()) {
+        g_pHyprRenderer->damageMonitor(monitor);
+        g_pCompositor->scheduleFrameForMonitor(monitor);
+    }
+}
+
+bool applyHyprbarsOverviewNoBar(const PHLWINDOW& window, WindowRuleEffectStorage effect) {
+    if (!window || !window->m_ruleApplicator || !window->m_isMapped || window->isHidden())
+        return false;
+
+    auto& props = window->m_ruleApplicator->m_otherProps.props;
+    if (props.contains(effect))
+        return false;
+
+    using CustomProp = Desktop::Rule::CWindowRuleApplicator::SCustomPropContainer;
+    props.emplace(effect, makeUnique<CustomProp>(CustomProp{
+                              .idx = effect,
+                              .propMask = Desktop::Rule::RULE_PROP_NONE,
+                              .effect = HYPRBARS_OVERVIEW_HIDE_EFFECT_VALUE,
+                          }));
+    notifyHyprbarsOverviewNoBarChanged(window);
+    return true;
+}
+
+bool clearHyprbarsOverviewNoBar(const PHLWINDOW& window, WindowRuleEffectStorage effect) {
+    if (!window || !window->m_ruleApplicator)
+        return false;
+
+    auto& props = window->m_ruleApplicator->m_otherProps.props;
+    const auto it = props.find(effect);
+    if (it == props.end() || !isHymissionHyprbarsOverviewNoBarProp(it->second, effect))
+        return false;
+
+    props.erase(it);
+    notifyHyprbarsOverviewNoBarChanged(window);
+    return true;
 }
 
 long getConfigInt(HANDLE handle, const char* name, long fallback) {
@@ -2022,6 +2083,7 @@ OverviewController::~OverviewController() {
     clearRegisteredTrackpadGestures();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
+    clearHyprbarsOverviewHiddenWindows();
     restoreWorkspaceNameOverrides();
     g_pHyprRenderer->m_directScanoutBlocked = false;
     setFullscreenRenderOverride(false);
@@ -2149,7 +2211,10 @@ bool OverviewController::initialize() {
         if (isVisible() && shouldHandleInput())
             updateHoveredFromPointer(false, false, false, false, "monitor-focused");
     });
-    m_configReloadedListener = events.config.reloaded.listen([this] { replaceNativeWorkspaceGestures("config-reloaded"); });
+    m_configReloadedListener = events.config.reloaded.listen([this] {
+        replaceNativeWorkspaceGestures("config-reloaded");
+        syncHyprbarsOverviewHiddenWindows();
+    });
 
     replaceNativeWorkspaceGestures("initialize");
 
@@ -3911,6 +3976,10 @@ bool OverviewController::workspaceChangeKeepsOverviewEnabled() const {
 
 bool OverviewController::hideBarsWhenStripShownEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:hide_bar_when_strip", 1) != 0;
+}
+
+bool OverviewController::hideHyprbarsDuringOverviewEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:hide_hyprbars_during_overview", 0) != 0;
 }
 
 bool OverviewController::hideBarAnimationEffectsEnabled() const {
@@ -9210,6 +9279,54 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
     m_state.fullscreenOverrideActive = false;
 }
 
+void OverviewController::clearHyprbarsOverviewHiddenWindows() {
+    for (const auto& record : m_hyprbarsOverviewHiddenWindows) {
+        if (const auto window = record.window.lock())
+            clearHyprbarsOverviewNoBar(window, record.effect);
+    }
+
+    m_hyprbarsOverviewHiddenWindows.clear();
+}
+
+void OverviewController::syncHyprbarsOverviewHiddenWindows() {
+    if (!hideHyprbarsDuringOverviewEnabled() || !isVisible()) {
+        clearHyprbarsOverviewHiddenWindows();
+        return;
+    }
+
+    const auto effect = hyprbarsNoBarEffect();
+    if (!effect) {
+        clearHyprbarsOverviewHiddenWindows();
+        return;
+    }
+
+    const auto isManagedNow = [this](const PHLWINDOW& window) {
+        return window && std::ranges::any_of(m_state.windows, [&](const ManagedWindow& managed) { return managed.window == window; });
+    };
+
+    std::erase_if(m_hyprbarsOverviewHiddenWindows, [&](const HyprbarsOverviewHiddenWindow& record) {
+        const auto window = record.window.lock();
+        const bool keep = window && isManagedNow(window) && record.effect == *effect;
+        if (!keep && window)
+            clearHyprbarsOverviewNoBar(window, record.effect);
+        return !keep;
+    });
+
+    for (const auto& managed : m_state.windows) {
+        if (!managed.window)
+            continue;
+
+        const bool alreadyTracked = std::ranges::any_of(m_hyprbarsOverviewHiddenWindows, [&](const HyprbarsOverviewHiddenWindow& record) {
+            return record.window.lock() == managed.window;
+        });
+        if (alreadyTracked)
+            continue;
+
+        if (applyHyprbarsOverviewNoBar(managed.window, *effect))
+            m_hyprbarsOverviewHiddenWindows.push_back({managed.window, *effect});
+    }
+}
+
 bool OverviewController::transformBoxForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, CBox& box, bool scaled) const {
     const auto transform = windowTransformFor(window, monitor);
     if (!transform)
@@ -9312,6 +9429,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_deactivatePending = false;
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
+    syncHyprbarsOverviewHiddenWindows();
     armOverviewRenderState(m_state);
     m_hoverSelectionAnchorValid = false;
     m_hoverSelectionRetargetBlockedUntil = {};
@@ -9708,6 +9826,7 @@ void OverviewController::deactivate() {
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
     clearHiddenStripLayerProxies();
+    clearHyprbarsOverviewHiddenWindows();
     restoreOverviewRenderState();
     deactivateHooks();
     setFullscreenRenderOverride(false);
@@ -10461,6 +10580,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     carryOverWorkspaceStripSnapshots(next, m_state);
     restoreOverviewRenderState();
     m_state = std::move(next);
+    syncHyprbarsOverviewHiddenWindows();
     armOverviewRenderState(m_state);
     applyWorkspaceNameOverrides(m_state);
     syncHiddenStripLayerProxies();

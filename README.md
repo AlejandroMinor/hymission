@@ -276,6 +276,7 @@ plugin {
         only_active_monitor = 0
         show_special = 0
         workspace_change_keeps_overview = 1
+        hide_hyprbars_during_overview = 0
 
         workspace_strip_anchor = left
         workspace_strip_empty_mode = existing
@@ -359,6 +360,7 @@ hl.config({
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
 | `show_special` | bool | `0` | Include currently visible special workspaces in the default scope. |
 | `workspace_change_keeps_overview` | bool | `1` | Keep overview open when switching workspaces in active-workspace scope. |
+| `hide_hyprbars_during_overview` | bool | `0` | Temporarily hide title bars from the official `hyprbars` plugin on windows managed by overview, then restore them when overview exits. This is a no-op unless `hyprbars` is loaded. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
 
 Behavior notes:

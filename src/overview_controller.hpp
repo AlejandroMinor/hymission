@@ -13,6 +13,7 @@
 
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
+#include <hyprland/src/desktop/rule/windowRule/WindowRuleEffectContainer.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
 #include <hyprland/src/devices/ITouch.hpp>
@@ -309,6 +310,11 @@ class OverviewController {
         std::string  name;
     };
 
+    struct HyprbarsOverviewHiddenWindow {
+        PHLWINDOWREF                                           window;
+        Desktop::Rule::CWindowRuleEffectContainer::storageType effect = Desktop::Rule::WINDOW_RULE_EFFECT_NONE;
+    };
+
     struct WorkspaceOverride {
         MONITORID    monitorId = MONITOR_INVALID;
         PHLWORKSPACE workspace;
@@ -424,6 +430,7 @@ class OverviewController {
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
     [[nodiscard]] bool         hideBarsWhenStripShownEnabled() const;
+    [[nodiscard]] bool         hideHyprbarsDuringOverviewEnabled() const;
     [[nodiscard]] bool         hideBarAnimationEffectsEnabled() const;
     [[nodiscard]] bool         hideBarAnimationBlurEnabled() const;
     [[nodiscard]] double       hideBarAnimationMoveMultiplier() const;
@@ -640,6 +647,8 @@ class OverviewController {
     void                       queuePostCloseDispatcher(PostCloseDispatcher dispatcher, std::string args);
     [[nodiscard]] SDispatchResult runHookedDispatcher(PostCloseDispatcher dispatcher, std::string args);
     void                       setFullscreenRenderOverride(bool suppress);
+    void                       syncHyprbarsOverviewHiddenWindows();
+    void                       clearHyprbarsOverviewHiddenWindows();
 
     void beginOpen(const PHLMONITOR& monitor, ScopeOverride requestedScope, PHLWINDOW preferredSelectedWindow = {},
                    const std::vector<WorkspaceOverride>& workspaceOverrides = {});
@@ -798,6 +807,7 @@ class OverviewController {
     std::string               m_postCloseDispatcherArgs;
     std::vector<GestureRegistration> m_registeredGestures;
     std::vector<WorkspaceNameBackup> m_workspaceNameBackups;
+    std::vector<HyprbarsOverviewHiddenWindow> m_hyprbarsOverviewHiddenWindows;
     GestureSession            m_gestureSession;
     ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
