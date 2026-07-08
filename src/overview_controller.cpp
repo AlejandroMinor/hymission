@@ -10909,28 +10909,26 @@ void OverviewController::carryOverWorkspaceStripSnapshots(State& next, const Sta
 }
 
 void OverviewController::renderBackdrop() const {
-    const CHyprColor color = colorWithAlphaMultiplier(backdropColor(), visualProgress());
-    if (color.a <= 0.0)
+    const double     progress = visualProgress();
+    const bool       blur = backdropBlurEnabled();
+    const CHyprColor color = colorWithAlphaMultiplier(backdropColor(), progress);
+    if (color.a <= 0.0 && !blur)
         return;
 
     const auto monitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
     if (!monitor)
         return;
 
-    Render::GL::CHyprOpenGLImpl::SRectRenderData renderData;
-    if (backdropBlurEnabled()) {
-        renderData.blur = true;
-        renderData.blurA = 1.0F;
-    }
-
-    g_pHyprOpenGL->renderRect(
-        CBox(
-            0.0,
-            0.0,
-            monitor->m_transformedSize.x,
-            monitor->m_transformedSize.y),
-        color,
-        renderData);
+    CRectPassElement::SRectData data;
+    data.box = CBox(
+        0.0,
+        0.0,
+        monitor->m_transformedSize.x,
+        monitor->m_transformedSize.y);
+    data.color = color;
+    data.blur = blur;
+    data.blurA = static_cast<float>(std::clamp(progress, 0.0, 1.0));
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
 }
 
 void OverviewController::renderSelectionChrome() const {
