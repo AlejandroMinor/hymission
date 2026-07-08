@@ -437,6 +437,7 @@ class OverviewController {
     [[nodiscard]] double       focusHoverThickness() const;
     [[nodiscard]] double       focusSelectedThickness() const;
     [[nodiscard]] double       dragOutlineThickness() const;
+    [[nodiscard]] bool         backdropBlurEnabled() const;
     [[nodiscard]] CHyprColor   backdropColor() const;
     [[nodiscard]] CHyprColor   workspaceStripBackgroundColor() const;
     [[nodiscard]] CHyprColor   workspaceStripInactiveColor() const;

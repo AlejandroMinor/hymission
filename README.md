@@ -290,6 +290,7 @@ plugin {
         hide_bar_animation_alpha_end = 0
         bar_single_mission_control = 0
         show_focus_indicator = 0
+        backdrop_blur = 1
         focus_hover_color = rgba(f2f7ff8c)
         focus_selected_color = rgba(3dc7fff2)
         focus_hover_thickness = 2
@@ -376,6 +377,7 @@ Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `backdrop_color` | color | `rgba(0d0f146b)` | Full-monitor overview backdrop. |
+| `backdrop_blur` | bool | `1` | Blur the full-monitor overview backdrop. |
 | `focus_hover_color` | color | `rgba(f2f7ff8c)` | Hover focus outline color. |
 | `focus_selected_color` | color | `rgba(3dc7fff2)` | Selected focus outline color. |
 | `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |

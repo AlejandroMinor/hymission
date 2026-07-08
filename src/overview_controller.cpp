@@ -3990,6 +3990,10 @@ double OverviewController::dragOutlineThickness() const {
     return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:drag_outline_thickness", 2.0));
 }
 
+bool OverviewController::backdropBlurEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:backdrop_blur", 1) != 0;
+}
+
 CHyprColor OverviewController::backdropColor() const {
     return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x6b0d0f14);
 }
@@ -10913,6 +10917,12 @@ void OverviewController::renderBackdrop() const {
     if (!monitor)
         return;
 
+    Render::GL::CHyprOpenGLImpl::SRectRenderData renderData;
+    if (backdropBlurEnabled()) {
+        renderData.blur = true;
+        renderData.blurA = 1.0F;
+    }
+
     g_pHyprOpenGL->renderRect(
         CBox(
             0.0,
@@ -10920,7 +10930,7 @@ void OverviewController::renderBackdrop() const {
             monitor->m_transformedSize.x,
             monitor->m_transformedSize.y),
         color,
-        {});
+        renderData);
 }
 
 void OverviewController::renderSelectionChrome() const {

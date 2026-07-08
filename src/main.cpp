@@ -335,6 +335,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("focus_hover_thickness", 2.0F);
     FLOAT_CONF("focus_selected_thickness", 4.0F);
     FLOAT_CONF("drag_outline_thickness", 2.0F);
+    INT_CONF("backdrop_blur", 1);
     COLOR_CONF("backdrop_color", 0x6b0d0f14LL);
     COLOR_CONF("workspace_strip_background_color", 0x3d081224LL);
     COLOR_CONF("workspace_strip_inactive_color", 0x2e0d1726LL);
