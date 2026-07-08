@@ -3991,7 +3991,7 @@ double OverviewController::dragOutlineThickness() const {
 }
 
 bool OverviewController::backdropBlurEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:backdrop_blur", 1) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:backdrop_blur", 0) != 0;
 }
 
 CHyprColor OverviewController::backdropColor() const {
