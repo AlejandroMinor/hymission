@@ -3995,7 +3995,7 @@ bool OverviewController::backdropBlurEnabled() const {
 }
 
 CHyprColor OverviewController::backdropColor() const {
-    return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x6b0d0f14);
+    return getConfigColor(m_handle, "plugin:hymission:backdrop_color", 0x00000000);
 }
 
 CHyprColor OverviewController::workspaceStripBackgroundColor() const {
