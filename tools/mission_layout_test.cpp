@@ -147,16 +147,26 @@ int main() {
             {.index = 0, .natural = {0, 0, 200, 160}, .label = "selected", .layoutEmphasis = 1.18},
             {.index = 1, .natural = {240, 0, 200, 160}, .label = "neighbor"},
         };
+        const std::vector<WindowInput> lightlyEmphasized = {
+            {.index = 0, .natural = {0, 0, 200, 160}, .label = "selected", .layoutEmphasis = 1.05},
+            {.index = 1, .natural = {240, 0, 200, 160}, .label = "neighbor"},
+        };
 
         const auto baselineSlots = engine.compute(baseline, {0, 0, 420, 220}, deterministicConfig());
+        const auto lightlyEmphasizedSlots = engine.compute(lightlyEmphasized, {0, 0, 420, 220}, deterministicConfig());
         const auto emphasizedSlots = engine.compute(emphasized, {0, 0, 420, 220}, deterministicConfig());
-        ok &= expect(baselineSlots.size() == 2 && emphasizedSlots.size() == 2, "selected emphasis case should keep both windows");
+        ok &= expect(baselineSlots.size() == 2 && lightlyEmphasizedSlots.size() == 2 && emphasizedSlots.size() == 2,
+                     "selected emphasis case should keep both windows");
         ok &= expect(emphasizedSlots[0].target.width > baselineSlots[0].target.width,
                      "selected emphasis should enlarge the selected preview");
+        ok &= expect(emphasizedSlots[0].target.width > lightlyEmphasizedSlots[0].target.width,
+                     "larger selected emphasis should enlarge the selected preview more until layout caps apply");
         ok &= expect(emphasizedSlots[1].target.width < baselineSlots[1].target.width || emphasizedSlots[1].target.x > baselineSlots[1].target.x,
                      "selected emphasis should push neighboring previews away");
         ok &= expect(!rectsOverlap(emphasizedSlots[0].target, emphasizedSlots[1].target),
                      "selected emphasis should keep previews non-overlapping");
+        ok &= expect(!rectsOverlap(lightlyEmphasizedSlots[0].target, lightlyEmphasizedSlots[1].target),
+                     "lighter selected emphasis should keep previews non-overlapping");
     }
 
     {

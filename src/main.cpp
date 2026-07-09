@@ -303,6 +303,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     FLOAT_CONF("layout_scale_weight", 1.0F);
     FLOAT_CONF("layout_space_weight", 0.10F);
     INT_CONF("expand_selected_window", 1);
+    FLOAT_CONF("hover_relayout_duration", 140.0F);
+    STRING_CONF("hover_relayout_curve", "ease_out_cubic");
+    FLOAT_CONF("hover_expand_scale", 1.18F);
     INT_CONF("overview_focus_follows_mouse", 1);
     INT_CONF("multi_workspace_sort_recent_first", 1);
     INT_CONF("niri_mode", 0);

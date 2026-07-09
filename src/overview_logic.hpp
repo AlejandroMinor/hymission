@@ -55,6 +55,13 @@ enum class RecommandVisibleGestureMode {
     TransferCapable,
 };
 
+enum class HoverRelayoutCurve {
+    Linear,
+    EaseInCubic,
+    EaseOutCubic,
+    EaseInOutCubic,
+};
+
 struct WorkspaceStripReservation {
     Rect band;
     Rect content;
@@ -66,6 +73,9 @@ struct WorkspaceStripReservation {
 [[nodiscard]] Rect                       lerpRect(const Rect& from, const Rect& to, double t);
 [[nodiscard]] double                     easeOutCubic(double t);
 [[nodiscard]] double                     easeInCubic(double t);
+[[nodiscard]] double                     easeInOutCubic(double t);
+[[nodiscard]] HoverRelayoutCurve         parseHoverRelayoutCurve(std::string_view value);
+[[nodiscard]] double                     applyHoverRelayoutCurve(HoverRelayoutCurve curve, double t);
 [[nodiscard]] bool                       shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMouse, long inputFollowMouseBeforeOpen);
 [[nodiscard]] RecommandVisibleGestureMode resolveRecommandVisibleGestureMode(int currentScopeSign, int gestureDirectionSign);
 [[nodiscard]] bool                       resolveOverviewGestureCommit(bool opening, double openness, double lastAlignedSpeed, double speedThreshold, bool cancelled);

@@ -261,6 +261,9 @@ plugin {
         layout_space_weight = 0.10
 
         expand_selected_window = 1
+        hover_relayout_duration = 140
+        hover_relayout_curve = ease_out_cubic
+        hover_expand_scale = 1.18
         overview_focus_follows_mouse = 1
         multi_workspace_sort_recent_first = 1
         niri_mode = 0
@@ -348,6 +351,9 @@ hl.config({
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
+| `hover_relayout_duration` | float | `140` | Selected-preview hover relayout duration in milliseconds. Values are clamped to `0` - `2000`; `0` completes immediately. |
+| `hover_relayout_curve` | string | `ease_out_cubic` | Selected-preview hover relayout easing curve. Supports `linear`, `ease_in_cubic`, `ease_out_cubic`, and `ease_in_out_cubic`; invalid values fall back to `ease_out_cubic`. |
+| `hover_expand_scale` | float | `1.18` | Preferred selected-preview scale multiplier used by `expand_selected_window`. Values are clamped to `1.0` - `2.0`, and layout bounds may cap the visible result. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
 | `niri_mode` | bool | `0` | Enable niri-like overflow behavior for the edge workspace strip. This is opt-in and does not turn the strip into the main overview content. |

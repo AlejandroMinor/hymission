@@ -187,7 +187,6 @@ constexpr double STRIP_MIN_THUMB_LENGTH = 12.0;
 constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
-constexpr auto   HOVER_SELECTION_RETARGET_COOLDOWN = std::chrono::milliseconds(static_cast<int>(RELAYOUT_DURATION_MS + 48.0));
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
 // motion toward a target would dwell on intermediate windows just long
@@ -3896,6 +3895,18 @@ bool OverviewController::expandSelectedWindowEnabled() const {
     if (m_state.engine == LayoutEngine::Thumbnail)
         return false;
     return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 1) != 0;
+}
+
+double OverviewController::hoverRelayoutDurationMs() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS), 0.0, 2000.0);
+}
+
+HoverRelayoutCurve OverviewController::hoverRelayoutCurve() const {
+    return parseHoverRelayoutCurve(getConfigString(m_handle, "plugin:hymission:hover_relayout_curve", "ease_out_cubic"));
+}
+
+double OverviewController::hoverExpandScale() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_expand_scale", SELECTED_WINDOW_LAYOUT_EMPHASIS), 1.0, 2.0);
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
@@ -8176,7 +8187,7 @@ double OverviewController::relayoutVisualProgress() const {
     if (!m_state.relayoutActive)
         return 1.0;
 
-    return easeOutCubic(std::clamp(m_state.relayoutProgress, 0.0, 1.0));
+    return applyHoverRelayoutCurve(hoverRelayoutCurve(), m_state.relayoutProgress);
 }
 
 PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
@@ -8676,7 +8687,8 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         logOverviewLayoutState("before expand-selected relayout", m_state);
     }
 
-    m_hoverSelectionRetargetBlockedUntil = std::chrono::steady_clock::now() + HOVER_SELECTION_RETARGET_COOLDOWN;
+    m_hoverSelectionRetargetBlockedUntil =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<int>(std::round(hoverRelayoutDurationMs() + 48.0)));
     m_hoverSelectionRetargetCandidateIndex.reset();
     m_hoverSelectionRetargetCandidateSince = {};
     m_hoverSelectionRetargetCandidatePrimed = false;
@@ -8733,7 +8745,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
     const double maxGrowthYPerSide = std::max(0.0, layoutConfig.rowSpacing * 2.0);
     const double scaleCapByGrowth = maxCenteredScaleForPerSideGrowth(selectedBase, maxGrowthXPerSide, maxGrowthYPerSide);
     const double scaleCapByBounds = maxCenteredScaleForBounds(selectedBase, boundsGlobal);
-    const double preferredScale = m_state.windows.size() <= 1 ? 1.0 : SELECTED_WINDOW_LAYOUT_EMPHASIS;
+    const double preferredScale = m_state.windows.size() <= 1 ? 1.0 : hoverExpandScale();
     const double scaleCap = std::max(1.0, std::min({preferredScale, scaleCapByGrowth, scaleCapByBounds}));
     const double rippleRadius =
         std::max(std::hypot(selectedBase.width, selectedBase.height) * 2.5, std::hypot(boundsGlobal.width, boundsGlobal.height) * 0.55);
@@ -10026,16 +10038,26 @@ void OverviewController::updateAnimation() {
         if (m_state.relayoutStart == std::chrono::steady_clock::time_point{}) {
             m_state.relayoutStart = now;
             m_state.relayoutProgress = 0.0;
+            if (hoverRelayoutDurationMs() <= 0.0) {
+                m_state.relayoutProgress = 1.0;
+                m_state.relayoutActive = false;
+                m_state.relayoutStart = {};
+                latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
+                if (debugLogsEnabled())
+                    debugLog("[hymission] relayout anim complete immediate");
+                return;
+            }
             if (debugLogsEnabled())
                 debugLog("[hymission] relayout anim start");
             return;
         }
 
+        const double durationMs = hoverRelayoutDurationMs();
         const auto elapsed = std::chrono::duration<double, std::milli>(now - m_state.relayoutStart).count();
-        m_state.relayoutProgress = clampUnit(elapsed / RELAYOUT_DURATION_MS);
+        m_state.relayoutProgress = durationMs <= 0.0 ? 1.0 : clampUnit(elapsed / durationMs);
         if (debugLogsEnabled()) {
             std::ostringstream out;
-            out << "[hymission] relayout anim t=" << m_state.relayoutProgress;
+            out << "[hymission] relayout anim t=" << m_state.relayoutProgress << " durationMs=" << durationMs;
             debugLog(out.str());
         }
 
@@ -11996,6 +12018,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     LayoutConfig config = layoutConfigForState(state);
     state.engine = config.engine;
+    const auto layoutEmphasisTarget =
+        config.engine == LayoutEngine::Thumbnail ? PHLWINDOW{} : (preferredSelectedWindow ? preferredSelectedWindow : focusedWindow);
+    const double selectedLayoutEmphasis = layoutEmphasisTarget ? hoverExpandScale() : 1.0;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle) || config.engine == LayoutEngine::Thumbnail;
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
@@ -12188,7 +12213,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
-            .layoutEmphasis = 1.0,
+            .layoutEmphasis = window == layoutEmphasisTarget ? selectedLayoutEmphasis : 1.0,
         });
     }
 

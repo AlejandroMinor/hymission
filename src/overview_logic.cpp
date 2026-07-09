@@ -166,6 +166,45 @@ double easeInCubic(double t) {
     return clamped * clamped * clamped;
 }
 
+double easeInOutCubic(double t) {
+    const double clamped = clampUnit(t);
+    if (clamped < 0.5)
+        return 4.0 * clamped * clamped * clamped;
+
+    const double shifted = -2.0 * clamped + 2.0;
+    return 1.0 - shifted * shifted * shifted * 0.5;
+}
+
+HoverRelayoutCurve parseHoverRelayoutCurve(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+
+    if (equalsAsciiInsensitive(value, "linear"))
+        return HoverRelayoutCurve::Linear;
+    if (equalsAsciiInsensitive(value, "ease_in_cubic") || equalsAsciiInsensitive(value, "ease-in-cubic"))
+        return HoverRelayoutCurve::EaseInCubic;
+    if (equalsAsciiInsensitive(value, "ease_out_cubic") || equalsAsciiInsensitive(value, "ease-out-cubic") || value.empty())
+        return HoverRelayoutCurve::EaseOutCubic;
+    if (equalsAsciiInsensitive(value, "ease_in_out_cubic") || equalsAsciiInsensitive(value, "ease-in-out-cubic"))
+        return HoverRelayoutCurve::EaseInOutCubic;
+
+    return HoverRelayoutCurve::EaseOutCubic;
+}
+
+double applyHoverRelayoutCurve(HoverRelayoutCurve curve, double t) {
+    switch (curve) {
+        case HoverRelayoutCurve::Linear:
+            return clampUnit(t);
+        case HoverRelayoutCurve::EaseInCubic:
+            return easeInCubic(t);
+        case HoverRelayoutCurve::EaseOutCubic:
+            return easeOutCubic(t);
+        case HoverRelayoutCurve::EaseInOutCubic:
+            return easeInOutCubic(t);
+    }
+
+    return easeOutCubic(t);
+}
+
 bool shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMouse, long inputFollowMouseBeforeOpen) {
     return handlesInput && overviewFocusFollowsMouse && inputFollowMouseBeforeOpen != 0;
 }

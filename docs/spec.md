@@ -328,6 +328,9 @@ workspace 切换补充语义：
 - `layout_scale_weight`
 - `layout_space_weight`
 - `expand_selected_window`
+- `hover_relayout_duration`
+- `hover_relayout_curve`
+- `hover_expand_scale`
 - `overview_focus_follows_mouse`
 - `niri_mode`
 - `niri_scroll_pixels_per_delta`
@@ -352,6 +355,7 @@ workspace 切换补充语义：
 - `layout_engine = grid` 保持既有 row-search 几何；`layout_engine = natural` / `apple` / `expose` / `mission-control` 使用 Apple-like 自然求解器，优先保留窗口进入 overview 前的相对方位并消除重叠，且不按窗口数量主动回退 row-search；`layout_engine = thumbnail` / `thumbnails` 使用 workspace 缩略图布局，窗口按 workspace 分组并在其各自缩略图卡片中保持精确位置；`one_workspace_per_row = 1` 时仍保留 workspace 行语义，并在每个 workspace band 内运行自然求解
 - `layout_engine_all` 和 `layout_engine_onlycurrentworkspace` 允许默认 all-workspace / active-workspace scope 使用不同布局；空字符串表示回退到 `layout_engine`。显式 `forceall` dispatcher scope 优先读取 `layout_engine_forceall`，为空时回退到 `layout_engine_all`
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
+- `hover_relayout_duration`、`hover_relayout_curve`、`hover_expand_scale` 只影响 `expand_selected_window` 的 selected-preview hover relayout，不影响 overview 打开/关闭动画、workspace transition 或 bar handoff
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `niri_mode` 默认关闭；打开后只改变边缘 workspace strip 的排布：active-centered、monitor aspect ratio、允许缩略图列表溢出屏幕
 - `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 在 overview 外连续发送 `layoutMsg move` 的幅度；默认 `1.0` 表示约把一次 `gestures:workspace_swipe_distance` 的手指位移映射为一个 viewport 的 scrolling-layout 位移；官方 `scrollMove` 不读取该配置
@@ -366,7 +370,7 @@ workspace 切换补充语义：
 - `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - `bar_single_mission_control` 只在当前 overview scope 同时展示多个 workspace 时生效；默认建议保持 `0`，这样 bar 继续显示正常的编号 workspace；`1` 时通过临时 workspace rename 为外部 bar 提供“只保留一个 Mission Control 项”的过滤前缀，不承诺对 shell / dock 做更深的直接集成
-- 除 `overview_focus_follows_mouse` 外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
+- 除 `overview_focus_follows_mouse` 和 selected-preview hover relayout 的上述三个细项外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
 
 ## 9. 验收标准

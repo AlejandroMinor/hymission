@@ -73,6 +73,16 @@ int main() {
 
     ok &= expect(easeOutCubic(0.0) == 0.0, "easeOutCubic(0) should be 0");
     ok &= expect(easeInCubic(1.0) == 1.0, "easeInCubic(1) should be 1");
+    ok &= expect(easeInOutCubic(0.0) == 0.0, "easeInOutCubic(0) should be 0");
+    ok &= expect(easeInOutCubic(0.5) == 0.5, "easeInOutCubic midpoint should be 0.5");
+    ok &= expect(easeInOutCubic(1.0) == 1.0, "easeInOutCubic(1) should be 1");
+    ok &= expect(parseHoverRelayoutCurve("linear") == HoverRelayoutCurve::Linear, "hover curve parser should accept linear");
+    ok &= expect(parseHoverRelayoutCurve("EASE-IN-CUBIC") == HoverRelayoutCurve::EaseInCubic, "hover curve parser should accept case-insensitive dash form");
+    ok &= expect(parseHoverRelayoutCurve("ease_in_out_cubic") == HoverRelayoutCurve::EaseInOutCubic, "hover curve parser should accept ease_in_out_cubic");
+    ok &= expect(parseHoverRelayoutCurve("unknown") == HoverRelayoutCurve::EaseOutCubic, "hover curve parser should fall back to ease_out_cubic");
+    ok &= expect(applyHoverRelayoutCurve(HoverRelayoutCurve::Linear, 0.25) == 0.25, "linear hover curve should preserve progress");
+    ok &= expect(applyHoverRelayoutCurve(HoverRelayoutCurve::EaseInCubic, 0.5) < 0.5, "ease-in hover curve should start slowly");
+    ok &= expect(applyHoverRelayoutCurve(HoverRelayoutCurve::EaseOutCubic, 0.5) > 0.5, "ease-out hover curve should start quickly");
     ok &= expect(shouldSyncOverviewLiveFocus(true, true, 1), "live focus should sync when overview and Hyprland follow-mouse are enabled");
     ok &= expect(!shouldSyncOverviewLiveFocus(true, true, 0), "live focus should not sync when Hyprland follow-mouse was disabled before opening overview");
     ok &= expect(!shouldSyncOverviewLiveFocus(false, true, 1), "live focus should not sync when overview input handling is inactive");
