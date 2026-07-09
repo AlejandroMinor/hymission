@@ -261,6 +261,7 @@ plugin {
         layout_space_weight = 0.10
 
         expand_selected_window = 1
+        hover_relayout_animation = ""
         hover_relayout_duration = 140
         hover_relayout_curve = ease_out_cubic
         hover_expand_scale = 1.18
@@ -351,8 +352,9 @@ hl.config({
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
-| `hover_relayout_duration` | float | `140` | Selected-preview hover relayout duration in milliseconds. Values are clamped to `0` - `2000`; `0` completes immediately. |
-| `hover_relayout_curve` | string | `ease_out_cubic` | Selected-preview hover relayout easing curve. Supports `linear`, `ease_in_cubic`, `ease_out_cubic`, and `ease_in_out_cubic`; invalid values fall back to `ease_out_cubic`. |
+| `hover_relayout_animation` | string | empty | Hyprland animation leaf used for selected-preview hover relayout, for example `windowsMove`. When set to a valid leaf, Hyprland's animation tree controls speed and supports both bezier and spring curves. Invalid or empty values fall back to `hover_relayout_duration` / `hover_relayout_curve`. |
+| `hover_relayout_duration` | float | `140` | Fallback selected-preview hover relayout duration in milliseconds. Values are clamped to `0` - `2000`; `0` completes immediately. Ignored when `hover_relayout_animation` resolves to a valid Hyprland animation leaf. |
+| `hover_relayout_curve` | string | `ease_out_cubic` | Fallback selected-preview hover relayout easing curve. First tries a Hyprland registered bezier name such as `default`, `linear`, or `easeOutQuint`; otherwise supports `ease_in_cubic`, `ease_out_cubic`, and `ease_in_out_cubic`, with invalid values falling back to `ease_out_cubic`. Ignored when `hover_relayout_animation` is active. |
 | `hover_expand_scale` | float | `1.18` | Preferred selected-preview scale multiplier used by `expand_selected_window`. Values are clamped to `1.0` - `2.0`, and layout bounds may cap the visible result. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |

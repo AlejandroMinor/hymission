@@ -17,6 +17,7 @@
 #include <hyprland/src/devices/IPointer.hpp>
 #include <hyprland/src/devices/ITouch.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/helpers/AnimatedVariable.hpp>
 #include <hyprland/src/helpers/signal/Signal.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
@@ -417,6 +418,7 @@ class OverviewController {
     [[nodiscard]] CollectionPolicy loadCollectionPolicy(ScopeOverride requestedScope) const;
     [[nodiscard]] std::optional<ScopeOverride> parseScopeOverride(const std::string& args, std::string& error) const;
     [[nodiscard]] bool         expandSelectedWindowEnabled() const;
+    [[nodiscard]] std::string  hoverRelayoutAnimationConfig() const;
     [[nodiscard]] double       hoverRelayoutDurationMs() const;
     [[nodiscard]] HoverRelayoutCurve hoverRelayoutCurve() const;
     [[nodiscard]] double       hoverExpandScale() const;
@@ -610,6 +612,12 @@ class OverviewController {
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
     [[nodiscard]] double       relayoutVisualProgress() const;
+    void                       beginRelayoutAnimation();
+    void                       setRelayoutInactive();
+    void                       completeRelayoutAnimation(const char* debugMessage = nullptr);
+    void                       clearRelayoutProgressAnimation();
+    [[nodiscard]] bool         startNativeRelayoutAnimation();
+    [[nodiscard]] bool         updateNativeRelayoutAnimation();
     [[nodiscard]] double       workspaceStripEnterProgress() const;
     [[nodiscard]] Vector2D     workspaceStripEnterOffset(const PHLMONITOR& monitor) const;
     [[nodiscard]] Rect         animatedWorkspaceStripRect(const Rect& rect, const PHLMONITOR& monitor) const;
@@ -847,6 +855,7 @@ class OverviewController {
     std::chrono::steady_clock::time_point m_hoverSelectionRetargetCandidateSince = {};
     bool                      m_hoverSelectionRetargetCandidatePrimed = false;
     bool                      m_suppressInitialHoverUpdate = false;
+    PHLANIMVAR<float>         m_relayoutProgressAnimation;
     std::size_t               m_postOpenRefreshFrames = 0;
 
     CHyprSignalListener       m_renderStageListener;

@@ -35,6 +35,7 @@
 #include <hyprland/src/devices/IKeyboard.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
+#include <hyprland/src/config/shared/animation/AnimationTree.hpp>
 #include <hyprland/src/config/shared/workspace/WorkspaceRuleManager.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/helpers/Monitor.hpp>
@@ -3897,6 +3898,10 @@ bool OverviewController::expandSelectedWindowEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:expand_selected_window", 1) != 0;
 }
 
+std::string OverviewController::hoverRelayoutAnimationConfig() const {
+    return trimCopy(getConfigString(m_handle, "plugin:hymission:hover_relayout_animation", ""));
+}
+
 double OverviewController::hoverRelayoutDurationMs() const {
     return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hover_relayout_duration", RELAYOUT_DURATION_MS), 0.0, 2000.0);
 }
@@ -4318,9 +4323,7 @@ void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const cha
     if (updated == 0)
         return;
 
-    m_state.relayoutActive = false;
-    m_state.relayoutProgress = 1.0;
-    m_state.relayoutStart = {};
+    setRelayoutInactive();
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -4850,9 +4853,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
                     managed.targetGlobal = currentPreviewRect(managed);
                     managed.relayoutFromGlobal = managed.targetGlobal;
                 }
-                m_state.relayoutActive = false;
-                m_state.relayoutProgress = 1.0;
-                m_state.relayoutStart = {};
+                setRelayoutInactive();
             }
 
             prepareGestureCloseExitGeometry();
@@ -4936,9 +4937,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
                 managed.targetGlobal = currentPreviewRect(managed);
                 managed.relayoutFromGlobal = managed.targetGlobal;
             }
-            m_state.relayoutActive = false;
-            m_state.relayoutProgress = 1.0;
-            m_state.relayoutStart = {};
+            setRelayoutInactive();
         }
 
         prepareGestureCloseExitGeometry();
@@ -5370,9 +5369,7 @@ bool OverviewController::beginOverviewWorkspaceTransition(const PHLMONITOR& moni
             managed.targetGlobal = currentPreviewRect(managed);
             managed.relayoutFromGlobal = managed.targetGlobal;
         }
-        m_state.relayoutActive = false;
-        m_state.relayoutProgress = 1.0;
-        m_state.relayoutStart = {};
+        setRelayoutInactive();
     }
 
     State source = m_state;
@@ -8187,7 +8184,98 @@ double OverviewController::relayoutVisualProgress() const {
     if (!m_state.relayoutActive)
         return 1.0;
 
+    if (m_relayoutProgressAnimation)
+        return clampUnit(m_relayoutProgressAnimation->value());
+
+    const std::string curveName = trimCopy(getConfigString(m_handle, "plugin:hymission:hover_relayout_curve", "ease_out_cubic"));
+    if (g_pAnimationManager && !curveName.empty() && g_pAnimationManager->bezierExists(curveName)) {
+        if (const auto curve = g_pAnimationManager->getBezier(curveName); curve)
+            return clampUnit(curve->getYForPoint(static_cast<float>(std::clamp(m_state.relayoutProgress, 0.0, 1.0))));
+    }
+
     return applyHoverRelayoutCurve(hoverRelayoutCurve(), m_state.relayoutProgress);
+}
+
+void OverviewController::clearRelayoutProgressAnimation() {
+    m_relayoutProgressAnimation.reset();
+}
+
+void OverviewController::setRelayoutInactive() {
+    clearRelayoutProgressAnimation();
+    m_state.relayoutActive = false;
+    m_state.relayoutProgress = 1.0;
+    m_state.relayoutStart = {};
+}
+
+void OverviewController::completeRelayoutAnimation(const char* debugMessage) {
+    setRelayoutInactive();
+    latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
+    if (debugMessage && debugLogsEnabled())
+        debugLog(debugMessage);
+}
+
+void OverviewController::beginRelayoutAnimation() {
+    clearRelayoutProgressAnimation();
+    m_state.relayoutActive = true;
+    m_state.relayoutProgress = 0.0;
+    m_state.relayoutStart = {};
+    damageOwnedMonitors();
+}
+
+bool OverviewController::startNativeRelayoutAnimation() {
+    const std::string leaf = hoverRelayoutAnimationConfig();
+    if (leaf.empty())
+        return false;
+
+    if (!g_pAnimationManager || !Config::animationTree() || !Config::animationTree()->nodeExists(leaf)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] hover relayout animation leaf unavailable leaf=" << leaf << " fallback=compat";
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const auto config = Config::animationTree()->getAnimationPropertyConfig(leaf);
+    if (!config) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] hover relayout animation config unavailable leaf=" << leaf << " fallback=compat";
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    g_pAnimationManager->createAnimation(0.F, m_relayoutProgressAnimation, config, AVARDAMAGE_NONE);
+    if (!m_relayoutProgressAnimation)
+        return false;
+
+    *m_relayoutProgressAnimation = 1.F;
+    m_state.relayoutProgress = clampUnit(m_relayoutProgressAnimation->value());
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] relayout native anim start leaf=" << leaf;
+        debugLog(out.str());
+    }
+
+    return true;
+}
+
+bool OverviewController::updateNativeRelayoutAnimation() {
+    if (!m_relayoutProgressAnimation)
+        return false;
+
+    m_state.relayoutProgress = clampUnit(m_relayoutProgressAnimation->value());
+    if (!m_relayoutProgressAnimation->isBeingAnimated() && m_state.relayoutProgress >= 0.999) {
+        completeRelayoutAnimation("[hymission] relayout native anim complete");
+    } else if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] relayout native anim t=" << m_state.relayoutProgress;
+        debugLog(out.str());
+    }
+
+    return true;
 }
 
 PHLWINDOW OverviewController::resolveExitFocus(CloseMode mode) const {
@@ -8980,10 +9068,7 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         return;
     }
 
-    m_state.relayoutActive = true;
-    m_state.relayoutProgress = 0.0;
-    m_state.relayoutStart = {};
-    damageOwnedMonitors();
+    beginRelayoutAnimation();
 }
 
 void OverviewController::clearPendingWindowGeometryRetry() {
@@ -9514,9 +9599,7 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
             managed.targetGlobal = currentPreviewRect(managed);
             managed.relayoutFromGlobal = managed.targetGlobal;
         }
-        m_state.relayoutActive = false;
-        m_state.relayoutProgress = 1.0;
-        m_state.relayoutStart = {};
+        setRelayoutInactive();
     }
 
     const double fromVisual = fromVisualOverride.value_or(visualProgress());
@@ -10034,17 +10117,18 @@ void OverviewController::updateAnimation() {
         return;
 
     if (m_state.phase == Phase::Active && m_state.relayoutActive) {
+        if (updateNativeRelayoutAnimation())
+            return;
+
         const auto now = std::chrono::steady_clock::now();
         if (m_state.relayoutStart == std::chrono::steady_clock::time_point{}) {
+            if (startNativeRelayoutAnimation())
+                return;
+
             m_state.relayoutStart = now;
             m_state.relayoutProgress = 0.0;
             if (hoverRelayoutDurationMs() <= 0.0) {
-                m_state.relayoutProgress = 1.0;
-                m_state.relayoutActive = false;
-                m_state.relayoutStart = {};
-                latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
-                if (debugLogsEnabled())
-                    debugLog("[hymission] relayout anim complete immediate");
+                completeRelayoutAnimation("[hymission] relayout anim complete immediate");
                 return;
             }
             if (debugLogsEnabled())
@@ -10062,12 +10146,7 @@ void OverviewController::updateAnimation() {
         }
 
         if (m_state.relayoutProgress >= 1.0) {
-            m_state.relayoutProgress = 1.0;
-            m_state.relayoutActive = false;
-            m_state.relayoutStart = {};
-            latchHoverSelectionAnchor(g_pInputManager->getMouseCoordsInternal());
-            if (debugLogsEnabled())
-                debugLog("[hymission] relayout anim complete");
+            completeRelayoutAnimation("[hymission] relayout anim complete");
         }
         return;
     }
@@ -10545,6 +10624,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     carryOverWorkspaceStripSnapshots(next, m_state);
     restoreOverviewRenderState();
     m_state = std::move(next);
+    clearRelayoutProgressAnimation();
     armOverviewRenderState(m_state);
     applyWorkspaceNameOverrides(m_state);
     syncHiddenStripLayerProxies();
