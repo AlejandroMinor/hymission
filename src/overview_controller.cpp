@@ -28,6 +28,11 @@
 #undef private
 
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/state/WorkspaceState.hpp>
+#include <hyprland/src/desktop/state/GlobalWindowController.hpp>
+#include <hyprland/src/desktop/state/ViewState.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/Group.hpp>
@@ -38,14 +43,15 @@
 #include <hyprland/src/config/shared/animation/AnimationTree.hpp>
 #include <hyprland/src/config/shared/workspace/WorkspaceRuleManager.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
-#include <hyprland/src/helpers/Monitor.hpp>
+#include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
-#include <hyprland/src/managers/animation/AnimationManager.hpp>
-#include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
-#include <hyprland/src/managers/CursorManager.hpp>
+#include <hyprland/src/animation/AnimationManager.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/pointer/PointerManager.hpp>
+#include <hyprland/src/pointer/cursor/CursorManager.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
 #include <hyprland/src/managers/EventManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
@@ -222,6 +228,16 @@ class ScopedFlag {
     bool  m_previous;
 };
 
+std::vector<PHLWORKSPACE> workspaceStateWorkspaces() {
+    return ::State::workspaceState() ? ::State::workspaceState()->workspacesCopy() : std::vector<PHLWORKSPACE>{};
+}
+
+bool isWindowFadingOut(const PHLWINDOW&) {
+    // v0.56 moved fadeouts out of CWindow. A fading window is no longer kept
+    // in the live view list, so live-window callers can treat it as visible.
+    return false;
+}
+
 void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWORKSPACE& workspace) {
     if (!window || !workspace || !window->m_workspace || !workspace->m_space || !window->layoutTarget())
         return;
@@ -232,14 +248,14 @@ void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWOR
     if (window->m_workspace == workspace)
         return;
 
-    const bool fullscreen = window->isFullscreen();
-    const auto fullscreenMode = window->m_fullscreenState.internal;
+    const bool fullscreen = Fullscreen::controller()->isFullscreen(window);
+    const auto fullscreenMode = Fullscreen::controller()->getFullscreenModes(window).internal;
     const bool wasVisible = window->m_workspace->isVisible();
     const auto targetMonitor = workspace->m_monitor.lock();
-    const auto positionOnMonitor = window->m_realPosition->goal() - (window->m_monitor ? window->m_monitor->m_position : Vector2D{});
+    const auto positionOnMonitor = window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) - (window->m_monitor ? window->m_monitor->m_position : Vector2D{});
 
     if (fullscreen)
-        g_pCompositor->setWindowFullscreenInternal(window, FSMODE_NONE);
+        Fullscreen::controller()->setFullscreenMode(window, FSMODE_NONE);
 
     window->moveToWorkspace(workspace);
     window->m_monitor = workspace->m_monitor;
@@ -258,12 +274,12 @@ void moveWindowToWorkspaceForThumbnailDrop(const PHLWINDOW& window, const PHLWOR
     g_layoutManager->newTarget(window->layoutTarget(), workspace->m_space);
 
     if (fullscreen)
-        g_pCompositor->setWindowFullscreenInternal(window, fullscreenMode);
+        Fullscreen::controller()->setFullscreenMode(window, fullscreenMode);
 
     workspace->updateWindows();
     if (window->m_workspace)
         window->m_workspace->updateWindows();
-    g_pCompositor->updateSuspendedStates();
+    Desktop::globalWindowController()->updateSuspendedStates();
 
     if (!wasVisible && window->m_workspace && window->m_workspace->isVisible()) {
         window->alpha(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE)->setValueAndWarp(0.F);
@@ -560,7 +576,7 @@ bool shouldWrapWorkspaceIds(const WORKSPACEID targetId, const WORKSPACEID curren
     WORKSPACEID lowestID = INT64_MAX;
     WORKSPACEID highestID = INT64_MIN;
 
-    for (const auto& workspace : g_pCompositor->getWorkspaces()) {
+    for (const auto& workspace : workspaceStateWorkspaces()) {
         if (!workspace || workspace->m_id < 0 || workspace->m_isSpecialWorkspace)
             continue;
 
@@ -870,8 +886,7 @@ SP<Render::IFramebuffer> layerFramebufferFor(const PHLLS& layer) {
     if (!layer || !g_pHyprRenderer)
         return nullptr;
 
-    g_pHyprRenderer->makeSnapshot(layer);
-    return layer->m_snapshotFB;
+    return g_pHyprRenderer->makeSnapshotFB(layer);
 }
 
 void setTextureLinearFiltering(const SP<Render::ITexture>& texture) {
@@ -1311,7 +1326,7 @@ Vector2D renderedWindowPosition(const PHLWINDOW& window, bool goal = false) {
     // Hyprland's realPosition is already expressed in global compositor coordinates.
     // Adding workspace render offsets or floating offsets here double-counts them and
     // pushes overview open/close geometry toward off-screen workspace animation space.
-    return goal ? window->m_realPosition->goal() : window->m_realPosition->value();
+    return goal ? window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL) : window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
 }
 
 Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
@@ -1319,7 +1334,7 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
         return {};
 
     Vector2D position = renderedWindowPosition(window, goal);
-    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    const Vector2D size = goal ? window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL) : window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
@@ -1328,7 +1343,7 @@ Rect layoutAnchorGlobalRectForWindow(const PHLWINDOW& window, bool goal = false)
         return {};
 
     const Vector2D position = renderedWindowPosition(window, goal);
-    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    const Vector2D size = goal ? window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL) : window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
@@ -1340,7 +1355,7 @@ Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     if (window->m_workspace && !window->m_pinned)
         position += goal ? window->m_workspace->m_renderOffset->goal() : window->m_workspace->m_renderOffset->value();
 
-    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    const Vector2D size = goal ? window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL) : window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
@@ -2143,7 +2158,10 @@ bool OverviewController::initialize() {
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::Open); });
-    m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) {
+    m_windowDestroyListener = events.window.destroy.listen([this](const PHLWINDOWREF& windowRef) {
+        const auto window = windowRef.lock();
+        if (!window)
+            return;
         pruneWindowActivationHistory(window);
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
     });
@@ -2335,7 +2353,7 @@ SDispatchResult OverviewController::open(const std::string& args) {
     if (!requestedScope)
         return {.success = false, .error = error};
 
-    const auto monitor = g_pCompositor->getMonitorFromCursor();
+    const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor) {
         return {.success = false, .error = "no monitor under cursor"};
     }
@@ -2402,7 +2420,7 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
 }
 
 SDispatchResult OverviewController::debugCurrentLayout() const {
-    const auto monitor = g_pCompositor->getMonitorFromCursor();
+    const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor) {
         return {.success = false, .error = "no monitor under cursor"};
     }
@@ -2572,7 +2590,7 @@ void OverviewController::renderStage(eRenderStage stage) {
         return;
 
     if (!m_workspaceTransition.active && (m_state.phase == Phase::Opening || m_state.phase == Phase::Active) &&
-        std::any_of(m_state.windows.begin(), m_state.windows.end(), [](const ManagedWindow& managed) { return managed.window && managed.window->m_fadingOut; })) {
+        std::any_of(m_state.windows.begin(), m_state.windows.end(), [](const ManagedWindow& managed) { return managed.window && isWindowFadingOut(managed.window); })) {
         scheduleVisibleStateRebuild();
     }
 
@@ -2756,10 +2774,10 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 
             if (window && hoveredStripIndex && *hoveredStripIndex < m_state.stripEntries.size()) {
                 const auto& entry = m_state.stripEntries[*hoveredStripIndex];
-                targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
+                targetWorkspace = entry.workspace ? entry.workspace : ::State::workspaceState()->query().id(entry.workspaceId).run();
                 if (!targetWorkspace && entry.monitor && entry.workspaceId != WORKSPACE_INVALID) {
                     const std::string targetName = entry.workspaceName.empty() ? std::to_string(entry.workspaceId) : entry.workspaceName;
-                    targetWorkspace = g_pCompositor->createNewWorkspace(entry.workspaceId, entry.monitor->m_id, targetName);
+                    targetWorkspace = ::State::workspaceState()->create(entry.workspaceId, entry.monitor->m_id, targetName);
                 }
             } else if (window && thumbnailDropIndex && *thumbnailDropIndex < m_state.windows.size()) {
                 const auto targetGroup = m_state.windows[*thumbnailDropIndex].slot.rowGroup;
@@ -2772,8 +2790,8 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
                 refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
                 refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
-                if (g_pAnimationManager)
-                    g_pAnimationManager->frameTick();
+                if (Animation::mgr())
+                    Animation::mgr()->frameTick();
                 rebuildVisibleState(window, true);
             }
 
@@ -3143,7 +3161,7 @@ bool OverviewController::shouldHideLayerSurface(const PHLLS& layer, const PHLMON
 
     const auto layerMonitor = layer->m_monitor.lock();
     const auto layerResource = layer->m_layerSurface.lock();
-    if (!layerMonitor || layerMonitor != monitor || !layerResource || !layer->m_mapped || layer->m_readyToDelete)
+    if (!layerMonitor || layerMonitor != monitor || !layerResource || !layer->m_mapped || layer->m_noProcess)
         return false;
 
     return layerResource->m_current.exclusive > 0;
@@ -3246,12 +3264,15 @@ void OverviewController::renderOverviewShadowForWindow(const PHLWINDOW& window, 
     if (*PSHADOWS != 1)
         return;
 
-    if (!window->m_isMapped || window->m_fadingOut)
+    if (!window->m_isMapped || isWindowFadingOut(window))
         return;
     if (window->m_ruleApplicator && (!window->m_ruleApplicator->decorate().valueOrDefault() || window->m_ruleApplicator->noShadow().valueOrDefault()))
         return;
 
-    const CHyprColor shadowColor = window->m_realShadowColor->value();
+    const auto& realShadowColors = window->m_realShadowColor.m_colors;
+    if (realShadowColors.empty())
+        return;
+    const CHyprColor shadowColor = realShadowColors.front();
     if (shadowColor == CHyprColor(0, 0, 0, 0))
         return;
 
@@ -3537,7 +3558,7 @@ bool OverviewController::handleTouchDown(const ITouch::SDownEvent& event) {
 
     PHLMONITOR monitor;
     if (event.device && !event.device->m_boundOutput.empty())
-        monitor = g_pCompositor->getMonitorFromName(event.device->m_boundOutput);
+        monitor = ::State::monitorState()->query().name(event.device->m_boundOutput).run();
     if (!monitor)
         monitor = Desktop::focusState()->monitor();
     if (!monitor || !containsHandle(m_state.participatingMonitors, monitor))
@@ -4125,7 +4146,7 @@ bool OverviewController::debugSurfaceLogsEnabled() const {
 PHLWORKSPACE OverviewController::activeLayoutWorkspace() const {
     PHLMONITOR monitor = Desktop::focusState()->monitor();
     if (!monitor)
-        monitor = g_pCompositor->getMonitorFromCursor();
+        monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor)
         return {};
 
@@ -4277,8 +4298,8 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
     if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
         controller->setOffset(offsetAfter);
         data->recalculate(true);
-        if (g_pAnimationManager)
-            g_pAnimationManager->frameTick();
+        if (Animation::mgr())
+            Animation::mgr()->frameTick();
     }
 
     if (traceMove) {
@@ -4492,7 +4513,7 @@ bool OverviewController::resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& 
 
     workspaceId = resolved.id;
     workspaceName = resolved.name;
-    workspace = g_pCompositor->getWorkspaceByID(workspaceId);
+    workspace = ::State::workspaceState()->query().id(workspaceId).run();
 
     if (step > 0 && gestureSwipeCreateNewEnabled() && (workspaceId <= monitor->m_activeWorkspace->m_id || !workspace)) {
         auto createTarget = getWorkspaceIDNameFromString("r+1");
@@ -4501,7 +4522,7 @@ bool OverviewController::resolveOverviewWorkspaceTargetByStep(const PHLMONITOR& 
 
         workspaceId = createTarget.id;
         workspaceName = createTarget.name.empty() ? std::to_string(createTarget.id) : createTarget.name;
-        workspace = g_pCompositor->getWorkspaceByID(workspaceId);
+        workspace = ::State::workspaceState()->query().id(workspaceId).run();
         syntheticEmpty = !workspace;
         return true;
     }
@@ -4858,7 +4879,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
 
             prepareGestureCloseExitGeometry();
         } else {
-            const auto monitor = g_pCompositor->getMonitorFromCursor();
+            const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
             if (!monitor)
                 return false;
 
@@ -4921,7 +4942,7 @@ bool OverviewController::beginTrackpadGesture(bool openOnly, ScopeOverride reque
 
     if (opening) {
         if (!isVisible()) {
-            const auto monitor = g_pCompositor->getMonitorFromCursor();
+            const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
             if (!monitor)
                 return false;
 
@@ -5698,9 +5719,9 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     const auto targetWorkspaceName = m_workspaceTransition.targetWorkspaceName;
     State      next = m_workspaceTransition.targetState;
 
-    auto targetWorkspace = g_pCompositor->getWorkspaceByID(targetWorkspaceId);
+    auto targetWorkspace = ::State::workspaceState()->query().id(targetWorkspaceId).run();
     if (!targetWorkspace && targetWorkspaceSyntheticEmpty) {
-        targetWorkspace = g_pCompositor->createNewWorkspace(targetWorkspaceId, transitionMonitor->m_id, targetWorkspaceName);
+        targetWorkspace = ::State::workspaceState()->create(targetWorkspaceId, transitionMonitor->m_id, targetWorkspaceName);
     }
     if (!targetWorkspace) {
         clearOverviewWorkspaceTransition();
@@ -5719,7 +5740,7 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
 
         if (oldWorkspace && oldWorkspace != targetWorkspace) {
-            for (const auto& window : g_pCompositor->m_windows) {
+            for (const auto& window : Desktop::viewState()->windows()) {
                 if (!window || window->m_workspace != oldWorkspace || !window->m_pinned)
                     continue;
 
@@ -5736,8 +5757,8 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
         targetWorkspace->m_renderOffset->setValueAndWarp(Vector2D{});
         targetWorkspace->m_alpha->setValueAndWarp(1.F);
         g_layoutManager->recalculateMonitor(transitionMonitor);
-        if (g_pAnimationManager)
-            g_pAnimationManager->frameTick();
+        if (Animation::mgr())
+            Animation::mgr()->frameTick();
 
         if (targetWorkspaceSyntheticEmpty || !containsHandle(next.managedWorkspaces, targetWorkspace) || next.ownerWorkspace != targetWorkspace) {
             const auto rebuildMonitor = m_state.ownerMonitor ? m_state.ownerMonitor : transitionMonitor;
@@ -5985,7 +6006,7 @@ SDispatchResult OverviewController::startOverviewWorkspaceTransitionForDispatche
 
         targetId = workspaceId;
         targetName = workspaceName;
-        targetWorkspace = g_pCompositor->getWorkspaceByID(targetId);
+        targetWorkspace = ::State::workspaceState()->query().id(targetId).run();
         if (targetWorkspace && targetWorkspace->m_monitor.lock() != monitor)
             return {.success = false, .error = "focusWorkspaceOnCurrentMonitor workspace is on another monitor"};
         syntheticEmpty = !targetWorkspace;
@@ -6004,7 +6025,7 @@ SDispatchResult OverviewController::startOverviewWorkspaceTransitionForDispatche
             if (previous.id == -1 || previous.id == currentWorkspace->m_id)
                 return {.id = WORKSPACE_NOT_CHANGED};
 
-            if (const auto existing = g_pCompositor->getWorkspaceByID(previous.id); existing)
+            if (const auto existing = ::State::workspaceState()->query().id(previous.id).run(); existing)
                 return {.id = existing->m_id, .name = existing->m_name};
 
             return {.id = previous.id, .name = previous.name.empty() ? std::to_string(previous.id) : previous.name};
@@ -6026,7 +6047,7 @@ SDispatchResult OverviewController::startOverviewWorkspaceTransitionForDispatche
 
         targetId = targetCurrent ? previousWorkspace.id : resolved.id;
         targetName = targetCurrent ? (previousWorkspace.name.empty() ? std::to_string(previousWorkspace.id) : previousWorkspace.name) : resolved.name;
-        targetWorkspace = g_pCompositor->getWorkspaceByID(targetId);
+        targetWorkspace = ::State::workspaceState()->query().id(targetId).run();
         if (targetWorkspace && targetWorkspace->m_isSpecialWorkspace)
             return {.success = false, .error = "overview workspace transition does not support special workspaces"};
         if (targetWorkspace && targetWorkspace->m_monitor.lock() != monitor)
@@ -6600,17 +6621,17 @@ bool OverviewController::windowHasUsableStateGeometry(const PHLWINDOW& window) c
     if (!window)
         return false;
 
-    if (hasUsableWindowSize(window->m_realSize->value()))
+    if (hasUsableWindowSize(window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)))
         return true;
 
-    return hasUsableWindowSize(window->m_realSize->goal());
+    return hasUsableWindowSize(window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL));
 }
 
 bool OverviewController::windowMatchesOverviewScope(const PHLWINDOW& window, const State& state, bool requireUsableGeometry) const {
     if (!window)
         return false;
 
-    if (!window->m_isMapped || window->m_fadingOut || window->isHidden())
+    if (!window->m_isMapped || isWindowFadingOut(window) || window->isHidden())
         return false;
 
     if (requireUsableGeometry && !windowHasUsableStateGeometry(window))
@@ -6659,7 +6680,7 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
     std::size_t workspaceMismatch = 0;
     std::size_t invalidSize = 0;
 
-    for (const auto& window : g_pCompositor->m_windows) {
+    for (const auto& window : Desktop::viewState()->windows()) {
         if (!window)
             continue;
 
@@ -6685,7 +6706,7 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
             continue;
         }
 
-        if (window->m_fadingOut) {
+        if (isWindowFadingOut(window)) {
             ++fading;
             continue;
         }
@@ -6699,7 +6720,7 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
         if (policy.onlyActiveMonitor) {
             participatingMonitors.push_back(monitor);
         } else {
-            for (const auto& candidate : g_pCompositor->m_monitors) {
+            for (const auto& candidate : ::State::monitorState()->monitors()) {
                 if (candidate)
                     participatingMonitors.push_back(candidate);
             }
@@ -6898,7 +6919,7 @@ PHLMONITOR OverviewController::preferredMonitorForWindow(const PHLWINDOW& window
             return workspaceMonitor;
     }
 
-    if (const auto monitor = g_pCompositor->getMonitorFromID(window->monitorID()); monitor && containsHandle(state.participatingMonitors, monitor))
+    if (const auto monitor = ::State::monitorState()->query().id(window->monitorID()).run(); monitor && containsHandle(state.participatingMonitors, monitor))
         return monitor;
 
     return state.ownerMonitor;
@@ -6977,10 +6998,10 @@ bool OverviewController::shouldUseGoalGeometryForStateSnapshot(const PHLWINDOW& 
     if (window->m_workspace && !window->m_workspace->isVisible())
         return true;
 
-    if (hasUsableWindowSize(window->m_realSize->value()))
+    if (hasUsableWindowSize(window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT)))
         return false;
 
-    return hasUsableWindowSize(window->m_realSize->goal());
+    return hasUsableWindowSize(window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL));
 }
 
 void OverviewController::refreshWorkspaceLayoutSnapshot(const PHLWORKSPACE& workspace, bool force) const {
@@ -7219,7 +7240,7 @@ double OverviewController::overviewBorderOutsetForWindow(const PHLWINDOW& window
         return 0.0;
 
     const int borderSize = window->getRealBorderSize();
-    if (borderSize <= 0 || window->m_X11DoesntWantBorders || window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN))
+    if (borderSize <= 0 || window->m_X11DoesntWantBorders || Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN)
         return 0.0;
     if (window->m_ruleApplicator && !window->m_ruleApplicator->decorate().valueOrDefault())
         return 0.0;
@@ -7376,7 +7397,7 @@ bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const 
     const int fbHeight = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.height * renderScaleForMonitor(monitor))));
 
     g_pHyprOpenGL->makeEGLCurrent();
-    g_pHyprRenderer->makeSnapshot(layer);
+    g_pHyprRenderer->makeSnapshotFB(layer);
     auto sourceFramebuffer = layerFramebufferFor(layer);
     if (!sourceFramebuffer || !sourceFramebuffer->isAllocated() || !sourceFramebuffer->getTexture()) {
         if (debugLogsEnabled()) {
@@ -7545,7 +7566,7 @@ void OverviewController::syncHiddenStripLayerProxies() {
     }
 
     std::vector<std::pair<PHLLS, PHLMONITOR>> desired;
-    for (const auto& layer : g_pCompositor->m_layers) {
+    for (const auto& layer : Desktop::viewState()->layers()) {
         const auto monitor = layer ? layer->m_monitor.lock() : PHLMONITOR{};
         if (!shouldHideLayerSurface(layer, monitor))
             continue;
@@ -7729,7 +7750,7 @@ bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, cons
     const bool transformed = transformSurfaceRenderDataForWindow(renderData->pWindow, monitor, *renderData);
     if (transformed) {
         renderData->alpha = managedPreviewAlphaFor(renderData->pWindow, snapshot.alpha);
-        if (!renderData->pWindow->m_fadingOut)
+        if (!isWindowFadingOut(renderData->pWindow))
             renderData->fadeAlpha = 1.0F;
     }
 
@@ -7957,8 +7978,8 @@ bool OverviewController::placeNewWindowInHoveredThumbnailWorkspace(const PHLWIND
     moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
     refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
     refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
+    if (Animation::mgr())
+        Animation::mgr()->frameTick();
 
     return window->m_workspace == targetWorkspace;
 }
@@ -8188,8 +8209,8 @@ double OverviewController::relayoutVisualProgress() const {
         return clampUnit(m_relayoutProgressAnimation->value());
 
     const std::string curveName = trimCopy(getConfigString(m_handle, "plugin:hymission:hover_relayout_curve", "ease_out_cubic"));
-    if (g_pAnimationManager && !curveName.empty() && g_pAnimationManager->bezierExists(curveName)) {
-        if (const auto curve = g_pAnimationManager->getBezier(curveName); curve)
+    if (Animation::mgr() && !curveName.empty() && Animation::mgr()->bezierExists(curveName)) {
+        if (const auto curve = Animation::mgr()->getBezier(curveName); curve)
             return clampUnit(curve->getYForPoint(static_cast<float>(std::clamp(m_state.relayoutProgress, 0.0, 1.0))));
     }
 
@@ -8227,7 +8248,7 @@ bool OverviewController::startNativeRelayoutAnimation() {
     if (leaf.empty())
         return false;
 
-    if (!g_pAnimationManager || !Config::animationTree() || !Config::animationTree()->nodeExists(leaf)) {
+    if (!Animation::mgr() || !Config::animationTree() || !Config::animationTree()->nodeExists(leaf)) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] hover relayout animation leaf unavailable leaf=" << leaf << " fallback=compat";
@@ -8246,7 +8267,7 @@ bool OverviewController::startNativeRelayoutAnimation() {
         return false;
     }
 
-    g_pAnimationManager->createAnimation(0.F, m_relayoutProgressAnimation, config, AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(0.F, m_relayoutProgressAnimation, config, AVARDAMAGE_NONE);
     if (!m_relayoutProgressAnimation)
         return false;
 
@@ -8323,15 +8344,15 @@ bool OverviewController::shouldClearWorkspaceFullscreenForExitTarget(const PHLWI
     if (!backup || !backup->workspace || !backup->hadFullscreenWindow)
         return false;
 
-    if (window->m_workspace != backup->workspace || window->m_fullscreenState.internal != FSMODE_NONE)
+    if (window->m_workspace != backup->workspace || Fullscreen::controller()->getFullscreenModes(window).internal != FSMODE_NONE)
         return false;
 
     PHLWINDOW fullscreenWindow;
-    for (const auto& candidate : g_pCompositor->m_windows) {
+    for (const auto& candidate : Desktop::viewState()->windows()) {
         if (!candidate || !candidate->m_isMapped || candidate->m_workspace != backup->workspace)
             continue;
 
-        if (candidate->m_fullscreenState.internal != FSMODE_NONE) {
+        if (Fullscreen::controller()->getFullscreenModes(candidate).internal != FSMODE_NONE) {
             fullscreenWindow = candidate;
             break;
         }
@@ -8350,11 +8371,11 @@ bool OverviewController::clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& 
         return false;
 
     PHLWINDOW fullscreenWindow;
-    for (const auto& candidate : g_pCompositor->m_windows) {
+    for (const auto& candidate : Desktop::viewState()->windows()) {
         if (!candidate || !candidate->m_isMapped || candidate->m_workspace != backupIt->workspace)
             continue;
 
-        if (candidate->m_fullscreenState.internal != FSMODE_NONE) {
+        if (Fullscreen::controller()->getFullscreenModes(candidate).internal != FSMODE_NONE) {
             fullscreenWindow = candidate;
             break;
         }
@@ -8369,11 +8390,9 @@ bool OverviewController::clearWorkspaceFullscreenForExitTarget(const PHLWINDOW& 
         debugLog(out.str());
     }
 
-    g_pCompositor->setWindowFullscreenInternal(fullscreenWindow, FSMODE_NONE);
+    Fullscreen::controller()->setFullscreenMode(fullscreenWindow, FSMODE_NONE);
 
     if (backupIt->workspace) {
-        backupIt->workspace->m_hasFullscreenWindow = false;
-        backupIt->workspace->m_fullscreenMode = FSMODE_NONE;
     }
     if (const auto workspaceMonitor = backupIt->workspace->m_monitor.lock())
         workspaceMonitor->m_solitaryClient.reset();
@@ -8436,18 +8455,18 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
     if (window->m_isFloating)
-        g_pCompositor->changeWindowZOrder(window, true);
+        Desktop::windowState()->raise(window);
 
     recordWindowActivation(window, true);
     (void)syncScrollingWorkspaceSpotOnWindow(window);
     if (activatedWorkspace)
         emitWorkspaceActiveEvents(window->m_workspace);
 
-    if (m_animationsEnabledOverridden && g_pAnimationManager) {
+    if (m_animationsEnabledOverridden && Animation::mgr()) {
         // Live focus can switch the real workspace before close starts. Even when the
         // target is already active, force one animation tick so Hyprland flushes the
         // workspace scene that overview was previously masking.
-        g_pAnimationManager->frameTick();
+        Animation::mgr()->frameTick();
         if (debugLogsEnabled())
             debugLog("[hymission] commit exit focus forced animation frameTick");
     }
@@ -8507,8 +8526,8 @@ bool OverviewController::syncScrollingWorkspaceSpotOnWindow(const PHLWINDOW& win
     if (const auto monitor = window->m_workspace->m_monitor.lock())
         g_layoutManager->recalculateMonitor(monitor);
 
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
+    if (Animation::mgr())
+        Animation::mgr()->frameTick();
 
     const auto offsetAfter = controller->getOffset();
 
@@ -8601,8 +8620,8 @@ void OverviewController::syncRealFocusDuringOverview(const PHLWINDOW& window, bo
         logScrollingWorkspaceSpotState("after focus before explicit spot sync", window->m_workspace, window);
     if (syncScrollingSpot)
         (void)syncScrollingWorkspaceSpotOnWindow(window);
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
+    if (Animation::mgr())
+        Animation::mgr()->frameTick();
     if (m_pendingLiveFocusWorkspaceChangeTarget.lock() == window)
         m_pendingLiveFocusWorkspaceChangeTarget.reset();
 
@@ -9337,15 +9356,14 @@ SDispatchResult OverviewController::runHookedDispatcher(PostCloseDispatcher disp
 
 void OverviewController::setFullscreenRenderOverride(bool suppress) {
     if (suppress) {
-        if (!m_state.fullscreenOverrideActive)
-            m_state.fullscreenOverrideActive = true;
+        if (m_state.fullscreenOverrideActive)
+            return;
+        m_state.fullscreenOverrideActive = true;
 
         for (const auto& backup : m_state.fullscreenBackups) {
-            if (!backup.workspace)
+            if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                 continue;
-
-            backup.workspace->m_hasFullscreenWindow = false;
-            backup.workspace->m_fullscreenMode = FSMODE_NONE;
+            Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, FSMODE_NONE);
             if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                 workspaceMonitor->m_solitaryClient.reset();
         }
@@ -9357,11 +9375,9 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
         return;
 
     for (const auto& backup : m_state.fullscreenBackups) {
-        if (!backup.workspace)
+        if (!backup.workspace || !backup.hadFullscreenWindow || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
             continue;
-
-        backup.workspace->m_hasFullscreenWindow = backup.hadFullscreenWindow;
-        backup.workspace->m_fullscreenMode = backup.fullscreenMode;
+        Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, backup.originalFullscreenMode);
         if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
             workspaceMonitor->m_solitaryClient.reset();
     }
@@ -9551,8 +9567,8 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
             focusWindowCompat(preferredWindow, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
         recordWindowActivation(preferredWindow, true);
         (void)syncScrollingWorkspaceSpotOnWindow(preferredWindow);
-        if (g_pAnimationManager)
-            g_pAnimationManager->frameTick();
+        if (Animation::mgr())
+            Animation::mgr()->frameTick();
         if (m_pendingLiveFocusWorkspaceChangeTarget.lock() == preferredWindow)
             m_pendingLiveFocusWorkspaceChangeTarget.reset();
 
@@ -9561,7 +9577,7 @@ bool OverviewController::retargetGestureScope(ScopeOverride requestedScope) {
     }
 
     if (!monitor)
-        monitor = g_pCompositor->getMonitorFromCursor();
+        monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor)
         return false;
 
@@ -9691,9 +9707,9 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
                 << static_cast<int>(pendingFullscreenBackup->originalFullscreenMode);
             debugLog(out.str());
         }
-        if (m_state.pendingExitFocus->m_fullscreenState.internal != FSMODE_NONE)
-            g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, FSMODE_NONE);
-        g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
+        if (Fullscreen::controller()->getFullscreenModes(m_state.pendingExitFocus).internal != FSMODE_NONE)
+            Fullscreen::controller()->setFullscreenMode(m_state.pendingExitFocus, FSMODE_NONE);
+        Fullscreen::controller()->setFullscreenMode(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
         m_state.exitFullscreenReapplied = true;
     } else if ((needsDeferredFullscreenClear || needsDeferredFullscreenReapply) && debugLogsEnabled()) {
         std::ostringstream out;
@@ -9777,8 +9793,8 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
 void OverviewController::deactivate() {
     setDamageTrackingOverride(false);
     if (m_closeCursorOverride) {
-        if (g_pCursorManager)
-            g_pCursorManager->setCursorFromName("left_ptr");
+        if (Pointer::Cursor::mgr())
+            Pointer::Cursor::mgr()->setCursorFromName("left_ptr");
         m_closeCursorOverride = false;
     }
     const auto monitor = m_state.ownerMonitor;
@@ -9882,7 +9898,7 @@ void OverviewController::deactivate() {
                 out << "[hymission] warp cursor to visible exit focus " << debugWindowLabel(desiredFocus) << " point=" << vectorToString(*visiblePoint);
                 debugLog(out.str());
             }
-            g_pCompositor->warpCursorTo(*visiblePoint);
+            Pointer::mgr()->warpTo(*visiblePoint);
         }
     }
 
@@ -9900,12 +9916,12 @@ void OverviewController::deactivate() {
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] fullscreen restore check " << debugWindowLabel(desiredFocus) << " mode=" << static_cast<int>(originalFullscreenMode)
-                << " internal=" << static_cast<int>(desiredFocus->m_fullscreenState.internal) << " needsRestore=1";
+                << " internal=" << static_cast<int>(Fullscreen::controller()->getFullscreenModes(desiredFocus).internal) << " needsRestore=1";
             debugLog(out.str());
         }
-        if (desiredFocus->m_fullscreenState.internal != FSMODE_NONE)
-            g_pCompositor->setWindowFullscreenInternal(desiredFocus, FSMODE_NONE);
-        g_pCompositor->setWindowFullscreenInternal(desiredFocus, originalFullscreenMode);
+        if (Fullscreen::controller()->getFullscreenModes(desiredFocus).internal != FSMODE_NONE)
+            Fullscreen::controller()->setFullscreenMode(desiredFocus, FSMODE_NONE);
+        Fullscreen::controller()->setFullscreenMode(desiredFocus, originalFullscreenMode);
     }
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -9942,11 +9958,11 @@ void OverviewController::deactivate() {
     m_state = {};
     for (const auto& ownedMonitor : ownedMonitors) {
         g_pHyprRenderer->damageMonitor(ownedMonitor);
-        g_pCompositor->scheduleFrameForMonitor(ownedMonitor);
+        ownedMonitor->scheduleFrame();
     }
     if (monitor) {
         g_pHyprRenderer->damageMonitor(monitor);
-        g_pCompositor->scheduleFrameForMonitor(monitor);
+        monitor->scheduleFrame();
     }
 
     switch (postCloseDispatcher) {
@@ -9995,7 +10011,7 @@ void OverviewController::scheduleDeactivate() {
 void OverviewController::damageOwnedMonitors() const {
     for (const auto& monitor : ownedMonitors()) {
         g_pHyprRenderer->damageMonitor(monitor);
-        g_pCompositor->scheduleFrameForMonitor(monitor);
+        monitor->scheduleFrame();
     }
 }
 
@@ -10032,9 +10048,9 @@ void OverviewController::updateAnimation() {
                             << static_cast<int>(pendingFullscreenBackup->originalFullscreenMode);
                         debugLog(out.str());
                     }
-                    if (m_state.pendingExitFocus->m_fullscreenState.internal != FSMODE_NONE)
-                        g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, FSMODE_NONE);
-                    g_pCompositor->setWindowFullscreenInternal(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
+                    if (Fullscreen::controller()->getFullscreenModes(m_state.pendingExitFocus).internal != FSMODE_NONE)
+                        Fullscreen::controller()->setFullscreenMode(m_state.pendingExitFocus, FSMODE_NONE);
+                    Fullscreen::controller()->setFullscreenMode(m_state.pendingExitFocus, pendingFullscreenBackup->originalFullscreenMode);
                     m_state.exitFullscreenReapplied = true;
                     appliedDeferredFullscreenMutation = true;
                 }
@@ -10230,12 +10246,12 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     // when leaving. Only call setCursorFromName on transition so we don't
     // fight the focused client's cursor every mouse-move frame.
     if (m_state.hoveredCloseIndex && !m_closeCursorOverride) {
-        if (g_pCursorManager)
-            g_pCursorManager->setCursorFromName("pointer");
+        if (Pointer::Cursor::mgr())
+            Pointer::Cursor::mgr()->setCursorFromName("pointer");
         m_closeCursorOverride = true;
     } else if (!m_state.hoveredCloseIndex && m_closeCursorOverride) {
-        if (g_pCursorManager)
-            g_pCursorManager->setCursorFromName("left_ptr");
+        if (Pointer::Cursor::mgr())
+            Pointer::Cursor::mgr()->setCursorFromName("left_ptr");
         m_closeCursorOverride = false;
     }
 
@@ -10544,7 +10560,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     }
 
     auto appendTransientClosingWindow = [&](const ManagedWindow& source) {
-        if (!source.window || !source.window->m_isMapped || !source.window->m_fadingOut)
+        if (!source.window || !source.window->m_isMapped || !isWindowFadingOut(source.window))
             return;
         if (std::any_of(next.windows.begin(), next.windows.end(), [&](const ManagedWindow& managed) { return managed.window == source.window; }))
             return;
@@ -10703,7 +10719,7 @@ void OverviewController::activateStripTarget(std::size_t index) {
     if (!entry.monitor || entry.workspaceId == WORKSPACE_INVALID)
         return;
 
-    auto targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
+    auto targetWorkspace = entry.workspace ? entry.workspace : ::State::workspaceState()->query().id(entry.workspaceId).run();
     if (targetWorkspace && targetWorkspace->m_isSpecialWorkspace)
         return;
 
@@ -11232,7 +11248,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     }
 
     const auto monitor = entry.monitor;
-    const auto targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
+    const auto targetWorkspace = entry.workspace ? entry.workspace : ::State::workspaceState()->query().id(entry.workspaceId).run();
     if (!targetWorkspace && !entry.syntheticEmpty)
         return;
     auto snapshot = std::make_shared<WorkspaceStripEntry::Snapshot>();
@@ -11360,15 +11376,14 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     const auto applyFullscreenOverrideForState = [](State& state, bool suppress) {
         if (suppress) {
-            if (!state.fullscreenOverrideActive)
-                state.fullscreenOverrideActive = true;
+            if (state.fullscreenOverrideActive)
+                return;
+            state.fullscreenOverrideActive = true;
 
             for (const auto& backup : state.fullscreenBackups) {
-                if (!backup.workspace)
+                if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                     continue;
-
-                backup.workspace->m_hasFullscreenWindow = false;
-                backup.workspace->m_fullscreenMode = FSMODE_NONE;
+                Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, FSMODE_NONE);
                 if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                     workspaceMonitor->m_solitaryClient.reset();
             }
@@ -11380,11 +11395,9 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             return;
 
         for (const auto& backup : state.fullscreenBackups) {
-            if (!backup.workspace)
+            if (!backup.workspace || !backup.hadFullscreenWindow || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                 continue;
-
-            backup.workspace->m_hasFullscreenWindow = backup.hadFullscreenWindow;
-            backup.workspace->m_fullscreenMode = backup.fullscreenMode;
+            Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, backup.originalFullscreenMode);
             if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                 workspaceMonitor->m_solitaryClient.reset();
         }
@@ -11397,8 +11410,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             return;
 
         for (const auto layerKind : {ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM}) {
-            for (const auto& layer : g_pCompositor->m_layers) {
-                if (!layer || !layer->m_mapped || layer->m_readyToDelete)
+            for (const auto& layer : Desktop::viewState()->layers()) {
+                if (!layer || !layer->m_mapped || layer->m_noProcess)
                     continue;
 
                 const auto layerMonitor = layer->m_monitor.lock();
@@ -11681,7 +11694,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
 
         const auto stripActiveWorkspace = activeWorkspaceForStripMonitor(monitor);
         std::vector<PHLWORKSPACE> normalWorkspaces;
-        const auto allWorkspaces = g_pCompositor->getWorkspacesCopy();
+        const auto allWorkspaces = workspaceStateWorkspaces();
         normalWorkspaces.reserve(allWorkspaces.size());
         for (const auto& workspace : allWorkspaces) {
             if (!workspace || workspace->m_isSpecialWorkspace)
@@ -11744,7 +11757,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
         }
 
         WORKSPACEID nextWorkspaceId = stripWorkspaceIds.empty() ? 1 : static_cast<WORKSPACEID>(std::max<int64_t>(stripWorkspaceIds.back(), 0) + 1);
-        while (g_pCompositor->getWorkspaceByID(nextWorkspaceId))
+        while (::State::workspaceState()->query().id(nextWorkspaceId).run())
             ++nextWorkspaceId;
 
         monitorEntries.push_back({
@@ -11826,8 +11839,8 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
     }
 
     const auto focusWindow = state.focusDuringOverview ? state.focusDuringOverview : Desktop::focusState()->window();
-    for (const auto& window : g_pCompositor->m_windows) {
-        if (!window || !window->m_isMapped || window->m_fadingOut || window->isHidden())
+    for (const auto& window : Desktop::viewState()->windows()) {
+        if (!window || !window->m_isMapped || isWindowFadingOut(window) || window->isHidden())
             continue;
 
         if (!windowHasUsableStateGeometry(window))
@@ -11905,7 +11918,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     if (state.collectionPolicy.onlyActiveMonitor) {
         addMonitor(monitor);
     } else {
-        for (const auto& candidate : g_pCompositor->m_monitors)
+        for (const auto& candidate : ::State::monitorState()->monitors())
             addMonitor(candidate);
     }
 
@@ -11936,7 +11949,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 addWorkspace(candidateMonitor->m_activeWorkspace);
         }
     } else {
-        for (const auto& workspace : g_pCompositor->getWorkspacesCopy()) {
+        for (const auto& workspace : workspaceStateWorkspaces()) {
             if (!workspace || workspace->m_isSpecialWorkspace)
                 continue;
 
@@ -11971,22 +11984,22 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         FullscreenWorkspaceBackup backup;
         backup.workspace = workspace;
-        backup.hadFullscreenWindow = workspace->m_hasFullscreenWindow;
-        backup.fullscreenMode = workspace->m_hasFullscreenWindow ? workspace->m_fullscreenMode : FSMODE_NONE;
-        if (workspace->m_hasFullscreenWindow) {
-            backup.originalFullscreenWindow = workspace->getFullscreenWindow();
-            backup.originalFullscreenMode = workspace->m_fullscreenMode;
+        backup.hadFullscreenWindow = Fullscreen::controller()->hasFullscreen(workspace);
+        backup.fullscreenMode = Fullscreen::controller()->hasFullscreen(workspace) ? Fullscreen::controller()->getFullscreenModes(workspace).internal : FSMODE_NONE;
+        if (Fullscreen::controller()->hasFullscreen(workspace)) {
+            backup.originalFullscreenWindow = Fullscreen::controller()->getFullscreenWindow(workspace);
+            backup.originalFullscreenMode = Fullscreen::controller()->getFullscreenModes(workspace).internal;
         }
 
         if (!backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE) {
-            for (const auto& window : g_pCompositor->m_windows) {
-                if (!window || !window->m_isMapped || window->m_workspace != workspace || window->m_fullscreenState.internal == FSMODE_NONE)
+            for (const auto& window : Desktop::viewState()->windows()) {
+                if (!window || !window->m_isMapped || window->m_workspace != workspace || Fullscreen::controller()->getFullscreenModes(window).internal == FSMODE_NONE)
                     continue;
 
                 backup.originalFullscreenWindow = window;
-                backup.originalFullscreenMode = window->m_fullscreenState.internal;
+                backup.originalFullscreenMode = Fullscreen::controller()->getFullscreenModes(window).internal;
                 backup.hadFullscreenWindow = true;
-                backup.fullscreenMode = window->m_fullscreenState.internal;
+                backup.fullscreenMode = Fullscreen::controller()->getFullscreenModes(window).internal;
                 break;
             }
         }
@@ -11995,7 +12008,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     }
 
     std::vector<PHLWINDOW> candidates;
-    candidates.reserve(g_pCompositor->m_windows.size());
+    candidates.reserve(Desktop::viewState()->windows().size());
 
     const auto appendCandidate = [&](const PHLWINDOW& window) {
         if (!window || containsHandle(candidates, window))
@@ -12016,7 +12029,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         }
     }
 
-    for (const auto& window : g_pCompositor->m_windows) {
+    for (const auto& window : Desktop::viewState()->windows()) {
         if (!window)
             continue;
 

@@ -24,6 +24,7 @@
 #include <hyprland/src/layout/algorithm/TiledAlgorithm.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/managers/input/trackpad/GestureTypes.hpp>
 #include <hyprland/src/managers/input/trackpad/gestures/ITrackpadGesture.hpp>
 #include <hyprland/src/plugins/HookSystem.hpp>
@@ -38,6 +39,9 @@
 class CEventLoopTimer;
 
 namespace hymission {
+
+using Fullscreen::eFullscreenMode;
+using Fullscreen::FSMODE_NONE;
 
 class OverviewOverlayPassElement;
 
