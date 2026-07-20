@@ -66,6 +66,9 @@ Requirements:
 - `pkg-config`
 - a C++23-capable compiler
 
+`nlohmann/json` is bundled as a single header under `src/vendor/` (v3.12.0),
+so no system package is required. Do not re-add `find_package(nlohmann_json)`.
+
 Build:
 
 ```sh
