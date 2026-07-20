@@ -6220,6 +6220,7 @@ bool OverviewController::installHooks() {
 
     if (!hookFunction("shouldRenderWindow",
                       std::vector<std::string>{
+                          "Render::IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<Monitor::CMonitor>)",
                           "IHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
                           "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)"},
                       m_shouldRenderWindowHook, reinterpret_cast<void*>(&hkShouldRenderWindow))) {
