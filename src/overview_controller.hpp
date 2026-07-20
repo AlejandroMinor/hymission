@@ -163,6 +163,7 @@ class OverviewController {
     struct FullscreenWorkspaceBackup {
         PHLWORKSPACE    workspace;
         PHLWINDOW       originalFullscreenWindow;
+        Rect            originalGlobalRect;
         bool            hadFullscreenWindow = false;
         eFullscreenMode fullscreenMode = FSMODE_NONE;
         eFullscreenMode originalFullscreenMode = FSMODE_NONE;

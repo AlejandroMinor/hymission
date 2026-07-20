@@ -7286,7 +7286,17 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
     } else {
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
     }
-    const Rect   actual = surfaceRenderGlobalRectForWindow(window);
+    Rect actual = surfaceRenderGlobalRectForWindow(window);
+    if (const auto* fullscreenBackup = fullscreenBackupForWindow(window); fullscreenBackup && fullscreenBackup->originalFullscreenWindow == window &&
+        fullscreenBackup->originalFullscreenMode != FSMODE_NONE &&
+        hasUsableWindowSize(Vector2D{fullscreenBackup->originalGlobalRect.width, fullscreenBackup->originalGlobalRect.height})) {
+        // setFullscreenMode(FSMODE_NONE) is intentionally used while the
+        // overview is visible, but Hyprland then exposes the window's normal
+        // layout size. Preserve only the source dimensions here; the current
+        // position still includes workspace animation offsets.
+        actual.width = fullscreenBackup->originalGlobalRect.width;
+        actual.height = fullscreenBackup->originalGlobalRect.height;
+    }
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
     const double uniformScale = std::max(0.0, std::min(current.width / actualWidth, current.height / actualHeight));
@@ -10501,6 +10511,7 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         backup.fullscreenMode = previousIt->fullscreenMode;
         backup.originalFullscreenWindow = previousIt->originalFullscreenWindow;
         backup.originalFullscreenMode = previousIt->originalFullscreenMode;
+        backup.originalGlobalRect = previousIt->originalGlobalRect;
     }
 
     auto previousRectForWindow = [&](const PHLWINDOW& window) -> Rect {
@@ -12004,6 +12015,12 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 break;
             }
         }
+
+        // Clearing fullscreen for overview immediately changes the live
+        // window geometry. Keep the pre-override source size so the renderer
+        // can still scale the preview from the actual fullscreen surface.
+        if (backup.originalFullscreenWindow && backup.originalFullscreenMode != FSMODE_NONE)
+            backup.originalGlobalRect = stateSnapshotGlobalRectForWindow(backup.originalFullscreenWindow);
 
         state.fullscreenBackups.push_back(backup);
     }
