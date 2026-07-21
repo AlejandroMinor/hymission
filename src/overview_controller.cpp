@@ -7286,17 +7286,7 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
     } else {
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
     }
-    Rect actual = surfaceRenderGlobalRectForWindow(window);
-    if (const auto* fullscreenBackup = fullscreenBackupForWindow(window); fullscreenBackup && fullscreenBackup->originalFullscreenWindow == window &&
-        fullscreenBackup->originalFullscreenMode != FSMODE_NONE &&
-        hasUsableWindowSize(Vector2D{fullscreenBackup->originalGlobalRect.width, fullscreenBackup->originalGlobalRect.height})) {
-        // setFullscreenMode(FSMODE_NONE) is intentionally used while the
-        // overview is visible, but Hyprland then exposes the window's normal
-        // layout size. Preserve only the source dimensions here; the current
-        // position still includes workspace animation offsets.
-        actual.width = fullscreenBackup->originalGlobalRect.width;
-        actual.height = fullscreenBackup->originalGlobalRect.height;
-    }
+    const Rect   actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
     const double uniformScale = std::max(0.0, std::min(current.width / actualWidth, current.height / actualHeight));
@@ -9374,7 +9364,6 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
         for (const auto& backup : m_state.fullscreenBackups) {
             if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                 continue;
-            Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, FSMODE_NONE);
             if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                 workspaceMonitor->m_solitaryClient.reset();
         }
@@ -9386,9 +9375,8 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
         return;
 
     for (const auto& backup : m_state.fullscreenBackups) {
-        if (!backup.workspace || !backup.hadFullscreenWindow || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
+        if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
             continue;
-        Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, backup.originalFullscreenMode);
         if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
             workspaceMonitor->m_solitaryClient.reset();
     }
@@ -10511,7 +10499,6 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
         backup.fullscreenMode = previousIt->fullscreenMode;
         backup.originalFullscreenWindow = previousIt->originalFullscreenWindow;
         backup.originalFullscreenMode = previousIt->originalFullscreenMode;
-        backup.originalGlobalRect = previousIt->originalGlobalRect;
     }
 
     auto previousRectForWindow = [&](const PHLWINDOW& window) -> Rect {
@@ -11395,7 +11382,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             for (const auto& backup : state.fullscreenBackups) {
                 if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                     continue;
-                Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, FSMODE_NONE);
                 if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                     workspaceMonitor->m_solitaryClient.reset();
             }
@@ -11407,9 +11393,8 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             return;
 
         for (const auto& backup : state.fullscreenBackups) {
-            if (!backup.workspace || !backup.hadFullscreenWindow || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
+            if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
                 continue;
-            Fullscreen::controller()->setFullscreenMode(backup.originalFullscreenWindow, backup.originalFullscreenMode);
             if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
                 workspaceMonitor->m_solitaryClient.reset();
         }
@@ -12015,12 +12000,6 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 break;
             }
         }
-
-        // Clearing fullscreen for overview immediately changes the live
-        // window geometry. Keep the pre-override source size so the renderer
-        // can still scale the preview from the actual fullscreen surface.
-        if (backup.originalFullscreenWindow && backup.originalFullscreenMode != FSMODE_NONE)
-            backup.originalGlobalRect = stateSnapshotGlobalRectForWindow(backup.originalFullscreenWindow);
 
         state.fullscreenBackups.push_back(backup);
     }
