@@ -208,6 +208,17 @@ class OverviewController {
         bool                     active = false;
     };
 
+    struct DragPreviewTarget {
+        Rect   area;
+        Rect   preview;
+        double blend = 0.0;
+    };
+
+    struct DragSettlement {
+        PHLWINDOW window;
+        Rect      preview;
+    };
+
     struct State {
         Phase                                  phase = Phase::Inactive;
         PHLMONITOR                             ownerMonitor;
@@ -612,6 +623,7 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestPreviewTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const;
     [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
+    [[nodiscard]] std::optional<DragPreviewTarget> draggedPreviewTargetFor(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<Rect>        draggedPreviewRectFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
@@ -713,6 +725,7 @@ class OverviewController {
     [[nodiscard]] bool shouldHideLayerSurface(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void renderBackdrop() const;
     void renderSelectionChrome() const;
+    void renderDraggedWindowPreview() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
     void clearStripWindowDragState();
@@ -851,6 +864,7 @@ class OverviewController {
     std::optional<std::size_t> m_pressedStripIndex;
     std::optional<std::size_t> m_pressedWindowIndex;
     std::optional<std::size_t> m_draggedWindowIndex;
+    std::optional<DragSettlement> m_dragSettlement;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
     Vector2D                  m_hoverSelectionAnchorPointer;

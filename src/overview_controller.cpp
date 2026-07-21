@@ -94,6 +94,7 @@ class OverviewOverlayPassElement final : public IPassElement {
         m_controller->renderSelectionChrome();
         m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
+        m_controller->renderDraggedWindowPreview();
         return {};
     }
 
@@ -194,6 +195,7 @@ constexpr double STRIP_MIN_THUMB_LENGTH = 12.0;
 constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
+constexpr double DRAG_PREVIEW_SCALE = 0.65;
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
 // motion toward a target would dwell on intermediate windows just long
@@ -2775,6 +2777,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const auto  window = m_state.windows[draggedIndex].window;
             const auto  hoveredStripIndex = m_state.hoveredStripIndex;
             const auto  thumbnailDropIndex = hitTestThumbnailDropTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y, draggedIndex);
+            const auto  draggedPreview = window ? draggedPreviewRectFor(window) : std::optional<Rect>{};
             PHLWORKSPACE targetWorkspace;
             clearStripWindowDragState();
 
@@ -2793,6 +2796,8 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
 
             if (targetWorkspace && window && window->m_workspace != targetWorkspace) {
                 const auto sourceWorkspace = window->m_workspace;
+                if (draggedPreview)
+                    m_dragSettlement = DragSettlement{.window = window, .preview = *draggedPreview};
                 moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
                 refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
                 refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
@@ -7924,6 +7929,80 @@ std::optional<std::size_t> OverviewController::hitTestThumbnailDropTarget(double
     return bestIndex;
 }
 
+std::optional<OverviewController::DragPreviewTarget> OverviewController::draggedPreviewTargetFor(const PHLWINDOW& window) const {
+    if (!window || !m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
+        return std::nullopt;
+
+    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+    if (dragged.window != window)
+        return std::nullopt;
+
+    const auto monitor = dragged.targetMonitor;
+    if (!monitor || monitor->m_size.x <= 0.0 || monitor->m_size.y <= 0.0)
+        return std::nullopt;
+
+    const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
+    const Rect actual = surfaceRenderGlobalRectForWindow(window);
+    const auto previewForArea = [&](const Rect& area) -> std::optional<DragPreviewTarget> {
+        if (area.width <= 1.0 || area.height <= 1.0 || !rectContainsPoint(area, pointer.x, pointer.y))
+            return std::nullopt;
+
+        const double scaleX = area.width / std::max(1.0, static_cast<double>(monitor->m_size.x));
+        const double scaleY = area.height / std::max(1.0, static_cast<double>(monitor->m_size.y));
+        Rect mapped = makeRect(area.x + (actual.x - monitor->m_position.x) * scaleX, area.y + (actual.y - monitor->m_position.y) * scaleY,
+                               actual.width * scaleX, actual.height * scaleY);
+        mapped.width = std::clamp(mapped.width, 1.0, area.width);
+        mapped.height = std::clamp(mapped.height, 1.0, area.height);
+        mapped.x = std::clamp(mapped.x, area.x, area.x + area.width - mapped.width);
+        mapped.y = std::clamp(mapped.y, area.y, area.y + area.height - mapped.height);
+
+        const double edgeDistance = std::min({pointer.x - area.x, area.x + area.width - pointer.x, pointer.y - area.y, area.y + area.height - pointer.y});
+        const double halfShortEdge = std::max(1.0, std::min(area.width, area.height) * 0.5);
+        const double t = clampUnit(edgeDistance / halfShortEdge);
+        const double blend = t * t * (3.0 - 2.0 * t);
+        return DragPreviewTarget{.area = area, .preview = mapped, .blend = blend};
+    };
+
+    if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
+        const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
+        if (entry.monitor == monitor && (!entry.workspace || entry.workspace != window->m_workspace)) {
+            if (const auto target = previewForArea(animatedWorkspaceStripRect(entry.rect, monitor)); target)
+                return target;
+        }
+    }
+
+    const auto targetIndex = hitTestThumbnailDropTarget(pointer.x, pointer.y, *m_draggedWindowIndex);
+    if (!targetIndex || *targetIndex >= m_state.windows.size())
+        return std::nullopt;
+
+    const auto targetGroup = m_state.windows[*targetIndex].slot.rowGroup;
+    if (targetGroup >= m_state.managedWorkspaces.size() || m_state.managedWorkspaces[targetGroup] == window->m_workspace)
+        return std::nullopt;
+
+    Rect groupRect{};
+    bool first = true;
+    for (const auto& managed : m_state.windows) {
+        if (managed.targetMonitor != monitor || managed.slot.rowGroup != targetGroup)
+            continue;
+
+        const Rect rect = currentPreviewRect(managed);
+        if (first) {
+            groupRect = rect;
+            first = false;
+            continue;
+        }
+
+        const double right = std::max(groupRect.x + groupRect.width, rect.x + rect.width);
+        const double bottom = std::max(groupRect.y + groupRect.height, rect.y + rect.height);
+        groupRect.x = std::min(groupRect.x, rect.x);
+        groupRect.y = std::min(groupRect.y, rect.y);
+        groupRect.width = right - groupRect.x;
+        groupRect.height = bottom - groupRect.y;
+    }
+
+    return previewForArea(groupRect);
+}
+
 std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& window) const {
     if (!window || !m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
         return std::nullopt;
@@ -7932,12 +8011,19 @@ std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& w
     if (dragged.window != window)
         return std::nullopt;
 
-    const Rect preview = currentPreviewRect(dragged);
-    if (preview.width <= 0.0 || preview.height <= 0.0)
+    const Rect sourcePreview = currentPreviewRect(dragged);
+    if (sourcePreview.width <= 0.0 || sourcePreview.height <= 0.0)
         return std::nullopt;
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
-    return makeRect(pointer.x - m_draggedWindowPointerOffset.x, pointer.y - m_draggedWindowPointerOffset.y, preview.width, preview.height);
+    const double offsetX = std::clamp(m_draggedWindowPointerOffset.x / sourcePreview.width, 0.0, 1.0) * sourcePreview.width * DRAG_PREVIEW_SCALE;
+    const double offsetY = std::clamp(m_draggedWindowPointerOffset.y / sourcePreview.height, 0.0, 1.0) * sourcePreview.height * DRAG_PREVIEW_SCALE;
+    const Rect following = makeRect(pointer.x - offsetX, pointer.y - offsetY, sourcePreview.width * DRAG_PREVIEW_SCALE, sourcePreview.height * DRAG_PREVIEW_SCALE);
+
+    if (const auto target = draggedPreviewTargetFor(window); target)
+        return lerpRect(following, target->preview, target->blend);
+
+    return following;
 }
 
 PHLWORKSPACE OverviewController::thumbnailWorkspaceAtPoint(double x, double y) const {
@@ -10480,9 +10566,9 @@ void OverviewController::rebuildVisibleState(PHLWINDOW preferredSelectedWindow, 
     std::vector<std::pair<PHLWINDOW, Rect>> previousPreviewRects;
     previousPreviewRects.reserve(m_state.windows.size() + m_state.transientClosingWindows.size());
     for (const auto& window : m_state.windows)
-        previousPreviewRects.emplace_back(window.window, currentPreviewRect(window));
+        previousPreviewRects.emplace_back(window.window, m_dragSettlement && m_dragSettlement->window == window.window ? m_dragSettlement->preview : currentPreviewRect(window));
     for (const auto& window : m_state.transientClosingWindows)
-        previousPreviewRects.emplace_back(window.window, currentPreviewRect(window));
+        previousPreviewRects.emplace_back(window.window, m_dragSettlement && m_dragSettlement->window == window.window ? m_dragSettlement->preview : currentPreviewRect(window));
 
     const auto layoutSelectedWindow =
         expandSelectedWindowEnabled() ? (preferredSelectedWindow ? preferredSelectedWindow : (selectedWindow() ? selectedWindow() : Desktop::focusState()->window())) : PHLWINDOW{};
@@ -10736,6 +10822,7 @@ void OverviewController::clearStripWindowDragState() {
     m_pressedStripIndex.reset();
     m_pressedWindowIndex.reset();
     m_draggedWindowIndex.reset();
+    m_dragSettlement.reset();
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
 }
@@ -11148,6 +11235,36 @@ void OverviewController::renderSelectionChrome() const {
         }
     }
 
+}
+
+void OverviewController::renderDraggedWindowPreview() const {
+    if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
+        return;
+
+    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+    if (!dragged.window || !dragged.targetMonitor)
+        return;
+
+    const auto target = draggedPreviewTargetFor(dragged.window);
+    if (!target)
+        return;
+
+    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!renderMonitor || renderMonitor != dragged.targetMonitor)
+        return;
+
+    using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+    static RenderWindowFn renderWindowFn = nullptr;
+    static bool           renderWindowResolved = false;
+    if (!renderWindowResolved) {
+        renderWindowResolved = true;
+        renderWindowFn = reinterpret_cast<RenderWindowFn>(findFunction("renderWindow", "IHyprRenderer::renderWindow"));
+        if (!renderWindowFn)
+            debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for drag preview");
+    }
+
+    if (renderWindowFn)
+        renderWindowFn(g_pHyprRenderer.get(), dragged.window, renderMonitor, Time::steadyNow(), false, Render::RENDER_PASS_ALL, false, true);
 }
 
 void OverviewController::renderCloseButtons() const {
