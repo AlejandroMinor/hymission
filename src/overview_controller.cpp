@@ -20,7 +20,7 @@
 #include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
-#include <nlohmann/json.hpp>
+#include "vendor/nlohmann/json.hpp"
 
 #define private public
 #include <hyprland/src/layout/algorithm/tiled/scrolling/ScrollingAlgorithm.hpp>
