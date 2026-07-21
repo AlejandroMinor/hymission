@@ -66,6 +66,9 @@ Requirements:
 - `pkg-config`
 - a C++23-capable compiler
 
+`nlohmann/json` is bundled as a single header under `src/vendor/` (v3.12.0),
+so no system package is required. Do not re-add `find_package(nlohmann_json)`.
+
 Build:
 
 ```sh
@@ -74,17 +77,23 @@ cmake --build build-cmake -j"$(nproc)"
 ctest --test-dir build-cmake --output-on-failure
 ```
 
-Load:
+Unload (optional): only needed if a previous copy is already loaded, so you
+start from a clean state. `plugin not loaded` is expected and harmless when a
+path was not the active copy.
 
 ```sh
-hyprctl plugin unload "$(pwd)/build/libhymission.so"
 hyprctl plugin unload "$(pwd)/build-cmake/libhymission.so"
-hyprctl plugin unload "$(pwd)/build-meson/libhymission.so"
+```
+
+> If you previously built into a different directory, unload that path too,
+> e.g. `build/` or `build-meson/`.
+
+Load the freshly built copy and confirm it is active:
+
+```sh
 hyprctl plugin load "$(pwd)/build-cmake/libhymission.so"
 hyprctl plugin list
 ```
-
-`plugin not loaded` is expected when the unloaded path is not the active copy.
 
 Build outputs:
 
