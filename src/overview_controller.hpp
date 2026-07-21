@@ -625,6 +625,7 @@ class OverviewController {
     [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
     [[nodiscard]] std::optional<DragPreviewTarget> draggedPreviewTargetFor(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<Rect>        draggedPreviewRectFor(const PHLWINDOW& window) const;
+    [[nodiscard]] double       draggedPreviewScale() const;
     [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
@@ -867,6 +868,7 @@ class OverviewController {
     std::optional<DragSettlement> m_dragSettlement;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
+    std::chrono::steady_clock::time_point m_draggedWindowStart = {};
     Vector2D                  m_hoverSelectionAnchorPointer;
     bool                      m_hoverSelectionAnchorValid = false;
     std::chrono::steady_clock::time_point m_hoverSelectionRetargetBlockedUntil = {};

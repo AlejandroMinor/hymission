@@ -196,6 +196,7 @@ constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr double DRAG_PREVIEW_SCALE = 0.65;
+constexpr auto   DRAG_PREVIEW_SHRINK_DURATION = std::chrono::milliseconds(120);
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
 // motion toward a target would dwell on intermediate windows just long
@@ -2624,7 +2625,9 @@ void OverviewController::renderStage(eRenderStage stage) {
             m_stripSnapshotsDirty = true;
             scheduleWorkspaceStripSnapshotRefresh();
         }
-        if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0) && !m_deactivatePending) {
+        if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 ||
+             (m_draggedWindowIndex && draggedPreviewScale() > DRAG_PREVIEW_SCALE + 0.001)) &&
+            !m_deactivatePending) {
             damageOwnedMonitors();
             if (m_postOpenRefreshFrames > 0)
                 --m_postOpenRefreshFrames;
@@ -2667,6 +2670,7 @@ void OverviewController::handleMouseMove() {
                 const Rect  rect = currentPreviewRect(managed);
                 m_draggedWindowIndex = m_pressedWindowIndex;
                 m_draggedWindowPointerOffset = Vector2D{pointer.x - rect.x, pointer.y - rect.y};
+                m_draggedWindowStart = std::chrono::steady_clock::now();
             }
         }
 
@@ -8016,14 +8020,26 @@ std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& w
         return std::nullopt;
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
-    const double offsetX = std::clamp(m_draggedWindowPointerOffset.x / sourcePreview.width, 0.0, 1.0) * sourcePreview.width * DRAG_PREVIEW_SCALE;
-    const double offsetY = std::clamp(m_draggedWindowPointerOffset.y / sourcePreview.height, 0.0, 1.0) * sourcePreview.height * DRAG_PREVIEW_SCALE;
-    const Rect following = makeRect(pointer.x - offsetX, pointer.y - offsetY, sourcePreview.width * DRAG_PREVIEW_SCALE, sourcePreview.height * DRAG_PREVIEW_SCALE);
+    const double scale = draggedPreviewScale();
+    const double offsetX = std::clamp(m_draggedWindowPointerOffset.x / sourcePreview.width, 0.0, 1.0) * sourcePreview.width * scale;
+    const double offsetY = std::clamp(m_draggedWindowPointerOffset.y / sourcePreview.height, 0.0, 1.0) * sourcePreview.height * scale;
+    const Rect following = makeRect(pointer.x - offsetX, pointer.y - offsetY, sourcePreview.width * scale, sourcePreview.height * scale);
 
     if (const auto target = draggedPreviewTargetFor(window); target)
         return lerpRect(following, target->preview, target->blend);
 
     return following;
+}
+
+double OverviewController::draggedPreviewScale() const {
+    if (!m_draggedWindowIndex || m_draggedWindowStart == std::chrono::steady_clock::time_point{})
+        return DRAG_PREVIEW_SCALE;
+
+    const auto elapsed = std::chrono::steady_clock::now() - m_draggedWindowStart;
+    const double t = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                               static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(DRAG_PREVIEW_SHRINK_DURATION).count()));
+    const double eased = t * t * (3.0 - 2.0 * t);
+    return 1.0 + (DRAG_PREVIEW_SCALE - 1.0) * eased;
 }
 
 PHLWORKSPACE OverviewController::thumbnailWorkspaceAtPoint(double x, double y) const {
@@ -10497,6 +10513,10 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
 
     if (previousHoveredStrip != m_state.hoveredStripIndex || previousHovered != m_state.hoveredIndex || previousSelected != m_state.selectedIndex ||
         previousFocus != m_state.focusDuringOverview) {
+        if (draggingWindow && previousHoveredStrip != m_state.hoveredStripIndex) {
+            m_stripSnapshotsDirty = true;
+            scheduleWorkspaceStripSnapshotRefresh();
+        }
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] hover pointer=" << pointer.x << ',' << pointer.y;
@@ -10825,6 +10845,7 @@ void OverviewController::clearStripWindowDragState() {
     m_dragSettlement.reset();
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
+    m_draggedWindowStart = {};
 }
 
 void OverviewController::activateStripTarget(std::size_t index) {
@@ -11263,8 +11284,12 @@ void OverviewController::renderDraggedWindowPreview() const {
             debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for drag preview");
     }
 
-    if (renderWindowFn)
+    if (renderWindowFn) {
+        const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
+        g_pHyprRenderer->m_bRenderingSnapshot = true;
         renderWindowFn(g_pHyprRenderer.get(), dragged.window, renderMonitor, Time::steadyNow(), false, Render::RENDER_PASS_ALL, false, true);
+        g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+    }
 }
 
 void OverviewController::renderCloseButtons() const {
@@ -11414,6 +11439,62 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         previewState.animationToVisual = 1.0;
         previewState.relayoutProgress = 1.0;
         previewState.relayoutActive = false;
+
+        const bool entryIsHoveredDragTarget = [&] {
+            if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !m_state.hoveredStripIndex ||
+                *m_state.hoveredStripIndex >= m_state.stripEntries.size())
+                return false;
+
+            const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+            const auto& hovered = m_state.stripEntries[*m_state.hoveredStripIndex];
+            return dragged.window && dragged.targetMonitor == monitor && hovered.monitor == monitor && &hovered == &entry &&
+                (!hovered.workspace || hovered.workspace != dragged.window->m_workspace);
+        }();
+        if (entryIsHoveredDragTarget) {
+            const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+            const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(dragged.window, shouldUseGoalGeometryForStateSnapshot(dragged.window));
+            const std::size_t index = previewState.windows.size();
+            previewState.windows.push_back({
+                .window = dragged.window,
+                .targetMonitor = monitor,
+                .title = dragged.window->m_title,
+                .naturalGlobal = naturalGlobal,
+                .exitGlobal = naturalGlobal,
+                .relayoutFromGlobal = naturalGlobal,
+                .targetGlobal = naturalGlobal,
+                .slot = {.index = index},
+                .previewAlpha = std::clamp(dragged.window->alphaTotal(), 0.0F, 1.0F),
+                .isFloating = dragged.window->m_isFloating,
+                .isPinned = dragged.window->m_pinned,
+            });
+
+            LayoutConfig previewConfig = layoutConfigForState(previewState);
+            previewConfig.forceRowGroups = false;
+            previewConfig.preserveInputOrder = true;
+            std::vector<WindowInput> previewInputs;
+            previewInputs.reserve(previewState.windows.size());
+            for (std::size_t previewIndex = 0; previewIndex < previewState.windows.size(); ++previewIndex) {
+                const auto& managed = previewState.windows[previewIndex];
+                const Rect outer = overviewBorderOuterRectForWindow(managed.window, managed.naturalGlobal);
+                previewInputs.push_back({
+                    .index = previewIndex,
+                    .natural = makeRect(outer.x - monitor->m_position.x, outer.y - monitor->m_position.y, outer.width, outer.height),
+                    .label = managed.title,
+                });
+            }
+
+            MissionControlLayout previewLayout;
+            for (const auto& slot : previewLayout.compute(previewInputs, overviewContentRectForMonitor(monitor, previewState), previewConfig)) {
+                if (slot.index >= previewState.windows.size())
+                    continue;
+
+                auto& managed = previewState.windows[slot.index];
+                managed.slot = slot;
+                managed.targetGlobal = overviewContentTargetForSlot(managed.window, monitor, managed.slot);
+                managed.relayoutFromGlobal = managed.targetGlobal;
+                managed.exitGlobal = managed.targetGlobal;
+            }
+        }
 
         const Vector2D previewOffset = stripThumbnailPreviewOffset(monitor, previewState);
         if (previewOffset.x != 0.0 || previewOffset.y != 0.0) {
