@@ -108,7 +108,7 @@ Build outputs:
 
 ```conf
 bind = SUPER, TAB, hymission:toggle
-bind = SUPER SHIFT, TAB, hymission:open
+bind = SUPER SHIFT, TAB, hymission:toggle,reverse
 bind = SUPER CTRL, TAB, hymission:close
 bind = SUPER, C, hymission:toggle,onlycurrentworkspace
 bind = SUPER, A, hymission:toggle,forceall
@@ -117,7 +117,7 @@ bind = SUPER, M, hymission:debug_current_layout
 
 | Dispatcher | Description |
 | --- | --- |
-| `hymission:toggle` | Toggle overview. Supports `onlycurrentworkspace` and `forceall`. |
+| `hymission:toggle` | Toggle overview. Supports `onlycurrentworkspace`, `forceall`, and the `reverse` switch-session direction modifier. |
 | `hymission:open` | Open overview. Supports `onlycurrentworkspace` and `forceall`. |
 | `hymission:close` | Close overview. |
 | `hymission:debug_current_layout` | Compute the current layout and show a notification summary without entering overview. |
@@ -128,6 +128,7 @@ bind = SUPER, M, hymission:debug_current_layout
 - no argument: use the default config-driven collection scope
 - `onlycurrentworkspace`: show only the current regular workspace on the anchor monitor
 - `forceall`: show all regular workspaces across participating monitors and include currently visible special workspaces
+- `reverse`: only for `hymission:toggle`; cycle backward in toggle switch mode. It can be combined with a scope, for example `forceall,reverse`.
 
 ### Toggle Switch Mode
 
@@ -143,6 +144,7 @@ switch_release_key = Super_L
 
 - the first `SUPER+TAB` opens overview as a switch session
 - repeated `TAB` presses while `SUPER` stays held cycle to the next overview target
+- `SUPER+SHIFT+TAB` can use `hymission:toggle,reverse` to open the switch session and select the previous target, then cycle backward on repeated presses
 - releasing `SUPER` commits the current selection and exits overview
 
 `hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
@@ -171,7 +173,7 @@ Available functions:
 - `hl.plugin.hymission.dispatch(name, args?)`
 - `hl.plugin.hymission.gesture(table|string, disable_inhibit?)`
 
-`toggle` and `open` accept the same optional scope arguments as the legacy dispatchers: `forceall` and `onlycurrentworkspace`.
+`toggle` and `open` accept the same optional scope arguments as the legacy dispatchers: `forceall` and `onlycurrentworkspace`. Only `toggle` additionally accepts `reverse` as a switch-session direction modifier.
 
 ### Gestures
 

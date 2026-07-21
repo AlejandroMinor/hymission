@@ -179,11 +179,12 @@ v1 dispatcher 名称固定为：
 - `hymission:open`
 - `hymission:close`
 
-`hymission:toggle` 和 `hymission:open` 支持以下可选参数：
+`hymission:toggle` 和 `hymission:open` 支持以下 scope 参数；其中 `reverse` 仅属于 `hymission:toggle`：
 
 - 空参数：走默认 scope 配置
 - `onlycurrentworkspace`：只展示 anchor monitor 的当前普通 workspace，不纳入 special workspace
 - `forceall`：跨所有 monitor 展示所有普通 workspace，并额外纳入当前可见的 special workspace
+- `reverse`：仅支持 `hymission:toggle`，使 toggle switch session 反向循环；可与 scope 组合，例如 `forceall,reverse`
 
 gesture-only 参数：
 
@@ -193,6 +194,8 @@ gesture-only 参数：
 
 - 默认情况下，`toggle,*` 在 overview 已可见时执行关闭，参数在关闭路径上忽略
 - 当 `toggle_switch_mode = 1` 且当前 overview 处于由 `hymission:toggle` 打开的 switch session 时，可见状态下再次触发 `toggle` 必须改为循环切到下一个 overview target，而不是关闭；直到 `switch_release_key` 松开才提交并退出
+- `hymission:toggle,reverse` 在 switch mode 下循环切到前一个 overview target；overview 未打开时首次触发也会打开并选中前一个 target
+- `reverse` 不适用于 `hymission:open`、`hymission:close` 或 gesture 参数
 - 上述 switch mode 只作用于 `hymission:toggle`；`open` / `close` / gesture 路径不参与
 - `open,*` 在 overview 已可见时，如果 scope 与当前不同，应直接重建到新的 scope；如果 scope 相同，则 no-op
 - 未知参数必须返回 dispatcher error，不得静默回退

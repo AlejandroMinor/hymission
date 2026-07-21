@@ -2385,9 +2385,15 @@ SDispatchResult OverviewController::close() {
 }
 
 SDispatchResult OverviewController::toggle(const std::string& args) {
+    const auto toggleArguments = parseToggleArguments(args);
+    if (!toggleArguments)
+        return {.success = false, .error = "invalid toggle argument: " + args};
+
+    const int cycleStep = toggleArguments->direction == ToggleDirection::Reverse ? -1 : 1;
+
     if (m_state.phase == Phase::Inactive || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle) {
         const bool activateSwitchSession = toggleSwitchModeEnabled();
-        const auto result = open(args);
+        const auto result = open(toggleArguments->scope);
         if (!result.success)
             return result;
 
@@ -2402,7 +2408,7 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
                 debugLog(out.str());
             }
             if (switchToggleAutoNextEnabled())
-                (void)moveSelectionCircular(1, "toggle-switch-open");
+                (void)moveSelectionCircular(cycleStep, cycleStep < 0 ? "toggle-switch-open-reverse" : "toggle-switch-open");
         }
 
         return result;
@@ -2411,8 +2417,8 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
     if (m_toggleSwitchSessionActive) {
         scheduleToggleSwitchReleasePoll();
         if (debugLogsEnabled())
-            debugLog("[hymission] toggle switch cycle");
-        (void)moveSelectionCircular(1, "toggle-switch-cycle");
+            debugLog(cycleStep < 0 ? "[hymission] toggle switch reverse cycle" : "[hymission] toggle switch cycle");
+        (void)moveSelectionCircular(cycleStep, cycleStep < 0 ? "toggle-switch-cycle-reverse" : "toggle-switch-cycle");
         return {};
     }
 

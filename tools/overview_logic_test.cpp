@@ -68,6 +68,19 @@ int main() {
     ok &= expect(chooseCyclicIndex(4, 3) == std::optional<std::size_t>{0}, "cyclic selection should wrap from the end to the start");
     ok &= expect(chooseCyclicIndex(4, 0, -1) == std::optional<std::size_t>{3}, "cyclic selection should support reverse wrapping");
 
+    const auto defaultToggle = parseToggleArguments("");
+    ok &= expect(defaultToggle && defaultToggle->scope.empty() && defaultToggle->direction == ToggleDirection::Forward,
+                 "toggle arguments should default to forward config scope");
+    const auto reverseToggle = parseToggleArguments("reverse");
+    ok &= expect(reverseToggle && reverseToggle->scope.empty() && reverseToggle->direction == ToggleDirection::Reverse,
+                 "toggle arguments should support reverse direction");
+    const auto scopedReverseToggle = parseToggleArguments("forceall, reverse");
+    ok &= expect(scopedReverseToggle && scopedReverseToggle->scope == "forceall" && scopedReverseToggle->direction == ToggleDirection::Reverse,
+                 "toggle arguments should combine a scope with reverse direction");
+    ok &= expect(!parseToggleArguments("unknown").has_value(), "toggle arguments should reject unknown values");
+    ok &= expect(!parseToggleArguments("reverse,reverse").has_value(), "toggle arguments should reject duplicate direction values");
+    ok &= expect(!parseToggleArguments("forceall,").has_value(), "toggle arguments should reject empty trailing values");
+
     const Rect middle = lerpRect({0, 0, 100, 100}, {100, 80, 50, 60}, 0.5);
     ok &= expect(middle.x == 50.0 && middle.y == 40.0 && middle.width == 75.0 && middle.height == 80.0, "lerpRect midpoint should be correct");
 

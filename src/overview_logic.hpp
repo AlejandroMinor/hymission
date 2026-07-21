@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -62,6 +63,16 @@ enum class HoverRelayoutCurve {
     EaseInOutCubic,
 };
 
+enum class ToggleDirection {
+    Forward,
+    Reverse,
+};
+
+struct ToggleArguments {
+    std::string scope;
+    ToggleDirection direction = ToggleDirection::Forward;
+};
+
 struct WorkspaceStripReservation {
     Rect band;
     Rect content;
@@ -70,6 +81,7 @@ struct WorkspaceStripReservation {
 [[nodiscard]] std::optional<std::size_t> hitTest(const std::vector<Rect>& rects, double x, double y);
 [[nodiscard]] std::optional<std::size_t> chooseDirectionalNeighbor(const std::vector<Rect>& rects, std::size_t currentIndex, Direction direction);
 [[nodiscard]] std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t currentIndex, int step = 1);
+[[nodiscard]] std::optional<ToggleArguments> parseToggleArguments(std::string_view value);
 [[nodiscard]] Rect                       lerpRect(const Rect& from, const Rect& to, double t);
 [[nodiscard]] double                     easeOutCubic(double t);
 [[nodiscard]] double                     easeInCubic(double t);

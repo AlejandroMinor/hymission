@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <string_view>
 
 namespace hymission {
@@ -143,6 +144,38 @@ std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t curr
         return std::nullopt;
 
     return static_cast<std::size_t>((static_cast<long long>(currentIndex) + normalized) % countSigned);
+}
+
+std::optional<ToggleArguments> parseToggleArguments(std::string_view value) {
+    ToggleArguments result;
+    value = trimAsciiWhitespace(value);
+    if (value.empty())
+        return result;
+
+    while (true) {
+        const std::size_t separator = value.find(',');
+        const std::string_view token = trimAsciiWhitespace(value.substr(0, separator));
+        if (token.empty())
+            return std::nullopt;
+
+        if (token == "reverse") {
+            if (result.direction == ToggleDirection::Reverse)
+                return std::nullopt;
+            result.direction = ToggleDirection::Reverse;
+        } else if (token == "onlycurrentworkspace" || token == "forceall") {
+            if (!result.scope.empty())
+                return std::nullopt;
+            result.scope = std::string(token);
+        } else {
+            return std::nullopt;
+        }
+
+        if (separator == std::string_view::npos)
+            break;
+        value.remove_prefix(separator + 1);
+    }
+
+    return result;
 }
 
 Rect lerpRect(const Rect& from, const Rect& to, double t) {
