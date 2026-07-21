@@ -7299,6 +7299,8 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
         current = managed->targetGlobal;
     } else {
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
+        if (const auto draggedPreview = draggedPreviewRectFor(window); draggedPreview)
+            current = *draggedPreview;
     }
     const Rect   actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
@@ -7920,6 +7922,22 @@ std::optional<std::size_t> OverviewController::hitTestThumbnailDropTarget(double
     }
 
     return bestIndex;
+}
+
+std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& window) const {
+    if (!window || !m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
+        return std::nullopt;
+
+    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+    if (dragged.window != window)
+        return std::nullopt;
+
+    const Rect preview = currentPreviewRect(dragged);
+    if (preview.width <= 0.0 || preview.height <= 0.0)
+        return std::nullopt;
+
+    const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
+    return makeRect(pointer.x - m_draggedWindowPointerOffset.x, pointer.y - m_draggedWindowPointerOffset.y, preview.width, preview.height);
 }
 
 PHLWORKSPACE OverviewController::thumbnailWorkspaceAtPoint(double x, double y) const {
@@ -11130,15 +11148,6 @@ void OverviewController::renderSelectionChrome() const {
         }
     }
 
-    if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size() && m_state.windows[*m_draggedWindowIndex].targetMonitor == renderMonitor) {
-        const auto& window = m_state.windows[*m_draggedWindowIndex];
-        const Rect  preview = currentPreviewRect(window);
-        const auto  pointer = g_pInputManager->getMouseCoordsInternal();
-        const Rect  ghostGlobal = makeRect(pointer.x - m_draggedWindowPointerOffset.x, pointer.y - m_draggedWindowPointerOffset.y, preview.width, preview.height);
-        const Rect  ghost = rectToMonitorRenderLocal(ghostGlobal, renderMonitor);
-        g_pHyprOpenGL->renderRect(toBox(ghost), colorWithAlphaMultiplier(dragPreviewColor(), progress), {});
-        renderOutline(ghostGlobal, colorWithAlphaMultiplier(dragOutlineColor(), progress), dragOutlineThickness());
-    }
 }
 
 void OverviewController::renderCloseButtons() const {

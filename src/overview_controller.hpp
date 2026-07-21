@@ -612,6 +612,7 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestPreviewTarget(double x, double y) const;
     [[nodiscard]] std::optional<std::size_t> hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const;
     [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
+    [[nodiscard]] std::optional<Rect>        draggedPreviewRectFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;

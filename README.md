@@ -403,9 +403,6 @@ Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
 | `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |
 | `focus_hover_thickness` | float | `2` | Hover focus outline thickness. |
 | `focus_selected_thickness` | float | `4` | Selected focus outline thickness. |
-| `drag_preview_color` | color | `rgba(29333d47)` | Drag ghost fill color. |
-| `drag_outline_color` | color | `rgba(f2f7ffd1)` | Drag ghost outline color. |
-| `drag_outline_thickness` | float | `2` | Drag ghost outline thickness. |
 | `close_button_color` | color | `rgba(29292eeb)` | Close button idle fill color. |
 | `close_button_hover_color` | color | `rgba(f24d47f2)` | Close button hover fill color. |
 | `close_button_glyph_color` | color | `rgba(fffffffa)` | Close button glyph color. |
