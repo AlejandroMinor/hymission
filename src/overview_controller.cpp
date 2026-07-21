@@ -4203,6 +4203,10 @@ ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
 }
 
 bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
+    const auto workspace = activeLayoutWorkspace();
+    if (workspace && Fullscreen::controller()->hasFullscreen(workspace))
+        return false;
+
     return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
 }
 
@@ -5272,10 +5276,14 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (overviewVisible && (!niriModeEnabled() || m_state.phase != Phase::Active))
         return reject("overview-visible");
 
+    const auto workspace = activeLayoutWorkspace();
+    if (workspace && Fullscreen::controller()->hasFullscreen(workspace))
+        return reject("fullscreen-active");
+
     if (!canScrollActiveLayoutWithGesture(direction))
         return reject("axis-mismatch");
 
-    if (!isScrollingWorkspace(activeLayoutWorkspace()))
+    if (!isScrollingWorkspace(workspace))
         return reject("active-workspace-not-scrolling");
 
     const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
