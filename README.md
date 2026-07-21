@@ -49,8 +49,8 @@ hyprpm reload
 
 If you use Hyprland's permission system, you may need to allow `hyprpm` in your config:
 
-```conf
-permission = /usr/(bin|local/bin)/hyprpm, plugin, allow
+```lua
+hl.permission("/usr/(bin|local/bin)/hyprpm", "plugin", "allow")
 ```
 
 Do not also manually `hyprctl plugin load` the same plugin if you manage it through `hyprpm`.
@@ -106,13 +106,19 @@ Build outputs:
 
 ### Dispatchers
 
-```conf
-bind = SUPER, TAB, hymission:toggle
-bind = SUPER SHIFT, TAB, hymission:toggle,reverse
-bind = SUPER CTRL, TAB, hymission:close
-bind = SUPER, C, hymission:toggle,onlycurrentworkspace
-bind = SUPER, A, hymission:toggle,forceall
-bind = SUPER, M, hymission:debug_current_layout
+```lua
+hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
+hl.bind("SUPER + SHIFT + TAB", function()
+    hl.plugin.hymission.toggle("reverse")
+end)
+hl.bind("SUPER + CTRL + TAB", hl.plugin.hymission.close)
+hl.bind("SUPER + C", function()
+    hl.plugin.hymission.toggle("onlycurrentworkspace")
+end)
+hl.bind("SUPER + A", function()
+    hl.plugin.hymission.toggle("forceall")
+end)
+hl.bind("SUPER + M", hl.plugin.hymission.debug_current_layout)
 ```
 
 | Dispatcher | Description |
@@ -134,12 +140,18 @@ bind = SUPER, M, hymission:debug_current_layout
 
 `toggle_switch_mode` only affects `hymission:toggle`.
 
-With a binding such as `bind = SUPER, TAB, hymission:toggle` and:
+With a binding such as `hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)` and:
 
-```conf
-toggle_switch_mode = 1
-switch_toggle_auto_next = 1
-switch_release_key = Super_L
+```lua
+hl.config({
+    plugin = {
+        hymission = {
+            toggle_switch_mode = 1,
+            switch_toggle_auto_next = 1,
+            switch_release_key = "Super_L",
+        },
+    },
+})
 ```
 
 - the first `SUPER+TAB` opens overview as a switch session
@@ -149,9 +161,7 @@ switch_release_key = Super_L
 
 `hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
 
-### Lua dispatchers
-
-When using Hyprland's Lua config, Hymission exposes native plugin functions under `hl.plugin.hymission`:
+Hymission exposes native plugin functions under `hl.plugin.hymission`:
 
 ```lua
 hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)
@@ -173,22 +183,11 @@ Available functions:
 - `hl.plugin.hymission.dispatch(name, args?)`
 - `hl.plugin.hymission.gesture(table|string, disable_inhibit?)`
 
-`toggle` and `open` accept the same optional scope arguments as the legacy dispatchers: `forceall` and `onlycurrentworkspace`. Only `toggle` additionally accepts `reverse` as a switch-session direction modifier.
+`toggle` and `open` accept the optional scope arguments `forceall` and `onlycurrentworkspace`. Only `toggle` additionally accepts `reverse` as a switch-session direction modifier.
 
 ### Gestures
 
-Use Hyprland's official gesture syntax. Scrolling layout panning can use either Hymission's compatibility gesture or Hyprland's native `scrollMove`:
-
-```conf
-gesture = 4, vertical, dispatcher, hymission:toggle,forceall
-gesture = 4, vertical, dispatcher, hymission:toggle,recommand
-gesture = 4, vertical, dispatcher, hymission:open,onlycurrentworkspace
-gesture = 3, horizontal, dispatcher, hymission:scroll,layout
-# or: gesture = 3, horizontal, scrollMove
-gesture = 3, vertical, workspace
-```
-
-Lua config should register Hymission gestures through `hl.plugin.hymission.gesture(...)` instead of `hl.gesture({ action = function() ... end })` when you want continuous overview progress:
+Register Hymission gestures through `hl.plugin.hymission.gesture(...)` instead of `hl.gesture({ action = function() ... end })` when you want continuous overview progress:
 
 ```lua
 hl.plugin.hymission.gesture({
@@ -234,11 +233,10 @@ Optional gesture fields are `mods`, `scale`, and `disable_inhibit`.
 Gesture notes:
 
 - `vertical` and `horizontal` are supported for plugin-managed overview gestures; `hymission:scroll,layout` also supports `swipe`
-- unofficial shorthand such as `gesture = ..., hymission:toggle,...` is not supported
 - default gesture semantics are state-aware: hidden overview opens in the configured direction, and visible `hymission:toggle,*` overview can close in either swipe direction
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
 - scrolling layout movement supports both `hymission:scroll,layout` and Hyprland's official `scrollMove` / Lua `scroll_move`
-- workspace swipes should use Hyprland's standard `gesture = ..., workspace`; Hymission already intercepts that path while overview is visible
+- workspace swipes should use `hl.plugin.hymission.gesture({ ..., action = "workspace" })`; Hymission already intercepts that path while overview is visible
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
 - switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
 - swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side
@@ -247,91 +245,77 @@ Gesture notes:
 
 ## Configuration
 
-All user-facing settings live under `plugin:hymission`.
+All user-facing settings live under `plugin.hymission` in `hl.config`.
 
 Example:
-
-```conf
-plugin {
-    hymission {
-        outer_padding_top = 92
-        outer_padding_right = 32
-        outer_padding_bottom = 32
-        outer_padding_left = 32
-        row_spacing = 32
-        column_spacing = 32
-        min_window_length = 120
-        min_preview_short_edge = 32
-        small_window_boost = 1.35
-        max_preview_scale = 0.95
-        workspace_overview_max_preview_scale = 0.95
-        min_slot_scale = 0.10
-        natural_scale_flex = 0.22
-        layout_engine = grid
-        layout_scale_weight = 1.0
-        layout_space_weight = 0.10
-
-        expand_selected_window = 1
-        hover_relayout_animation = ""
-        hover_relayout_duration = 140
-        hover_relayout_curve = ease_out_cubic
-        hover_expand_scale = 1.18
-        overview_focus_follows_mouse = 1
-        multi_workspace_sort_recent_first = 1
-        niri_mode = 0
-        niri_scroll_pixels_per_delta = 1.0
-        niri_workspace_scale = 1.0
-        niri_scrolling_preview_gap = 0
-        toggle_switch_mode = 1
-        switch_toggle_auto_next = 1
-        switch_release_key = Super_L
-        gesture_invert_vertical = 0
-        one_workspace_per_row = 0
-        only_active_workspace = 0
-        only_active_monitor = 0
-        show_special = 0
-        workspace_change_keeps_overview = 1
-        hide_hyprbars_during_overview = 0
-
-        workspace_strip_anchor = left
-        workspace_strip_empty_mode = existing
-        workspace_strip_thickness = 160
-        workspace_strip_gap = 24
-        hide_bar_when_strip = 1
-        hide_bar_animation = 1
-        hide_bar_animation_blur = 1
-        hide_bar_animation_move_multiplier = 0.8
-        hide_bar_animation_scale_divisor = 1.1
-        hide_bar_animation_alpha_end = 0
-        bar_single_mission_control = 0
-        show_focus_indicator = 0
-        backdrop_blur = 0
-        backdrop_color = rgba(00000000)
-        focus_hover_color = rgba(f2f7ff8c)
-        focus_selected_color = rgba(3dc7fff2)
-        focus_hover_thickness = 2
-        focus_selected_thickness = 4
-        workspace_strip_inactive_tint_color = rgba(00000000)
-
-        debug_logs = 0
-        debug_surface_logs = 0
-    }
-}
-```
-
-Lua config uses the same names under `plugin.hymission`:
 
 ```lua
 hl.config({
     plugin = {
         hymission = {
             outer_padding_top = 92,
+            outer_padding_right = 32,
+            outer_padding_bottom = 32,
+            outer_padding_left = 32,
+            row_spacing = 32,
+            column_spacing = 32,
+            min_window_length = 120,
+            min_preview_short_edge = 32,
+            small_window_boost = 1.35,
+            max_preview_scale = 0.95,
+            workspace_overview_max_preview_scale = 0.95,
+            min_slot_scale = 0.10,
+            natural_scale_flex = 0.22,
             layout_engine = "grid",
+            layout_scale_weight = 1.0,
+            layout_space_weight = 0.10,
+
+            expand_selected_window = 1,
+            hover_relayout_animation = "",
+            hover_relayout_duration = 140,
+            hover_relayout_curve = "ease_out_cubic",
+            hover_expand_scale = 1.18,
+            overview_focus_follows_mouse = 1,
+            multi_workspace_sort_recent_first = 1,
             niri_mode = 0,
+            niri_scroll_pixels_per_delta = 1.0,
+            niri_workspace_scale = 1.0,
+            niri_scrolling_preview_gap = 0,
+            toggle_switch_mode = 1,
+            switch_toggle_auto_next = 1,
             switch_release_key = "Super_L",
+            gesture_invert_vertical = 0,
+            one_workspace_per_row = 0,
+            only_active_workspace = 0,
+            only_active_monitor = 0,
+            show_special = 0,
+            workspace_change_keeps_overview = 1,
+            hide_hyprbars_during_overview = 0,
+
             workspace_strip_anchor = "left",
+            workspace_strip_empty_mode = "existing",
+            workspace_strip_thickness = 160,
+            workspace_strip_gap = 24,
+            hide_bar_when_strip = 1,
+            hide_bar_animation = 1,
+            hide_bar_animation_blur = 1,
+            hide_bar_animation_move_multiplier = 0.8,
+            hide_bar_animation_scale_divisor = 1.1,
+            hide_bar_animation_alpha_end = 0,
+            bar_single_mission_control = 0,
+            show_focus_indicator = 0,
+            backdrop_blur = 0,
+            backdrop_color = "rgba(00000000)",
+            focus_hover_color = "rgba(f2f7ff8c)",
+            focus_selected_color = "rgba(3dc7fff2)",
+            focus_hover_thickness = 2,
+            focus_selected_thickness = 4,
+            workspace_strip_inactive_tint_color = "rgba(00000000)",
+
+            debug_logs = 0,
+            debug_surface_logs = 0,
         },
-    },
+    }
 })
 ```
 
@@ -434,7 +418,7 @@ Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
-With `niri_mode = 1`, the strip stays in the configured edge band and the main overview remains the scaled window overview. The strip uses monitor-aspect workspace thumbnails, centers the active workspace on open, and allows the thumbnail list to overflow instead of shrinking every workspace into view. Tiled `scrolling` layout previews use `workspace_overview_max_preview_scale` on the non-scrolling axis and may overflow along the scrolling axis, so gesture panning moves the centered row/column instead of shrinking the whole tape into view. Both `hymission:scroll,layout` and Hyprland's official `scrollMove` / Lua `scroll_move` can scroll the `scrolling` layout inside the niri overview; workspace switching continues to use Hyprland's standard `gesture = ..., workspace`.
+With `niri_mode = 1`, the strip stays in the configured edge band and the main overview remains the scaled window overview. The strip uses monitor-aspect workspace thumbnails, centers the active workspace on open, and allows the thumbnail list to overflow instead of shrinking every workspace into view. Tiled `scrolling` layout previews use `workspace_overview_max_preview_scale` on the non-scrolling axis and may overflow along the scrolling axis, so gesture panning moves the centered row/column instead of shrinking the whole tape into view. Both `hymission:scroll,layout` and Lua `scroll_move` can scroll the `scrolling` layout inside the niri overview; workspace switching continues to use `hl.plugin.hymission.gesture({ ..., action = "workspace" })`.
 
 ### Optional Waybar Single-Entry Setup
 
@@ -442,7 +426,7 @@ Leave `bar_single_mission_control = 0` if you want `hyprland/workspaces` to keep
 
 If you explicitly want `hyprland/workspaces` to collapse to a single `Mission Control` button while multi-workspace overview is visible:
 
-1. Set `bar_single_mission_control = 1` in `plugin:hymission`.
+1. Set `bar_single_mission_control = 1` in `hl.config({ plugin = { hymission = { ... } } })`.
 2. Add an `ignore-workspaces` rule that hides the plugin's temporary names:
 
 ```jsonc
