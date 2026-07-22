@@ -252,6 +252,17 @@ gesture-only 参数：
 
 `hjkl` 是否支持不作为 v1 强制项；若实现，应与方向键语义一致。
 
+`pick_labels_enabled = 1` 时，每个 preview 右上角显示一个 pick label（`1`-`9`，超过 9 个窗口后依次使用 `A1`-`A9`、`B1`-`B9`……），可直接按对应按键选中该 preview：
+
+- pick label 的顺序按 monitor 参与顺序，再按 preview 的行（`y` 聚类）、列（`x` 升序）计算，近似视觉阅读顺序，不依赖具体 layout engine 的内部索引
+- 数字键 `1`-`9`（含小键盘）在没有待定前缀时直接选中对应 pick label
+- 字母键 `A`-`Z`（不区分大小写）在没有待定前缀时进入等待第二个数字键的"前缀"状态并消耗该按键；随后的数字键 `1`-`9` 完成 `字母+数字` 选择
+- 前缀等待有超时（约 1.5 秒）；超时，或在前缀待定期间按下无法完成选择的其他键（含 `0`、`Esc`、方向键、`Return`），都会取消前缀，且不消耗、不改变该按键自身既有语义（例如 `Esc` 仍会正常退出 overview）
+- pick label 命中后，若 `pick_labels_direct_activate = 1`，立即激活对应窗口并退出 overview；为 `0`（默认）时只改变当前选中项，语义与方向键一致，仍需 `Return` 确认
+- 当参与窗口少于 2 个、鼠标正在拖拽/按下某个 preview、或 overview 不处于 `Active` phase 时，不显示也不处理 pick label 按键
+- 单个 preview 尺寸小于字号的 4 倍（与 `closeButtonRectFor()` 的同款比例阈值）时跳过该 preview 的 pick label 绘制，避免 chip 溢出到相邻 preview；该尺寸判断只影响渲染，不影响按键解析——对应的数字/字母键依然能选中这个窗口（连同鼠标/方向键），只是看不到对应的数字
+- pick label 是本节现有键盘导航（方向键、`Return`、`Esc`）之外的补充选择方式，不改变、不替代既有导航语义
+
 ### 6.4 overview 打开期间的集合变化
 
 - 如果 overview 打开期间有窗口关闭、打开、移动 workspace 或 monitor，且该变化会影响当前 scope，overview 应重建当前可见状态
@@ -351,6 +362,8 @@ workspace 切换补充语义：
 - `workspace_strip_thickness`
 - `workspace_strip_gap`
 - `bar_single_mission_control`
+- `pick_labels_enabled`
+- `pick_labels_direct_activate`
 
 约束：
 
@@ -376,6 +389,9 @@ workspace 切换补充语义：
 - `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - `bar_single_mission_control` 只在当前 overview scope 同时展示多个 workspace 时生效；默认建议保持 `0`，这样 bar 继续显示正常的编号 workspace；`1` 时通过临时 workspace rename 为外部 bar 提供“只保留一个 Mission Control 项”的过滤前缀，不承诺对 shell / dock 做更深的直接集成
+- `pick_labels_enabled` 控制是否在每个 preview 上叠加数字/字母 pick label，并让对应按键直接选中该 preview；默认 `0`
+- pick label 复用 `close_button_color`（背景）、`close_button_glyph_color`（文字）和 `close_button_size`（字号比例）；不引入独立的颜色/大小配置
+- `pick_labels_direct_activate` 只在 `pick_labels_enabled = 1` 时生效，控制命中 pick label 后是立即激活并退出 overview（`1`），还是只切换选中项、仍需 `Return` 确认（`0`，默认）
 - 除 `overview_focus_follows_mouse` 和 selected-preview hover relayout 的上述细项外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
 

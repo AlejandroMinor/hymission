@@ -92,6 +92,7 @@ class OverviewOverlayPassElement final : public IPassElement {
 
         m_controller->renderHiddenStripLayerProxies();
         m_controller->renderSelectionChrome();
+        m_controller->renderPickLabels();
         m_controller->renderCloseButtons();
         m_controller->renderWorkspaceStrip();
         return {};
@@ -203,6 +204,7 @@ constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr auto   HOVER_SELECTION_RETARGET_DWELL = std::chrono::milliseconds(150);
 constexpr auto   TOGGLE_SWITCH_RELEASE_POLL_INTERVAL = std::chrono::milliseconds(16);
 constexpr auto   CAPTURE_INPUT_SUPPRESS_TIMEOUT = std::chrono::seconds(10);
+constexpr auto   PICK_LABEL_PREFIX_TIMEOUT = std::chrono::milliseconds(1500);
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
 constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 constexpr auto   HYPRBARS_PASS_ELEMENT_NAME = "CBarPassElement";
@@ -325,6 +327,32 @@ CHyprColor getConfigColor(HANDLE handle, const char* name, uint64_t fallback) {
 
 CHyprColor colorWithAlphaMultiplier(const CHyprColor& color, double multiplier) {
     return color.modifyA(static_cast<float>(std::clamp(color.a * multiplier, 0.0, 1.0)));
+}
+
+// Shared "create-once, reschedule after" boilerplate for one-shot timers owned
+// by a single SP<CEventLoopTimer> member.
+void armOrRescheduleTimer(SP<CEventLoopTimer>& timer, std::chrono::milliseconds timeout,
+                           std::function<void(SP<CEventLoopTimer> self, void* data)> onFire) {
+    if (!g_pEventLoopManager)
+        return;
+
+    if (!timer) {
+        timer = makeShared<CEventLoopTimer>(timeout, std::move(onFire), nullptr);
+        g_pEventLoopManager->addTimer(timer);
+        return;
+    }
+
+    timer->updateTimeout(timeout);
+}
+
+void cancelAndClearTimer(SP<CEventLoopTimer>& timer) {
+    if (!timer)
+        return;
+
+    timer->cancel();
+    if (g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(timer);
+    timer.reset();
 }
 
 std::string getConfigString(HANDLE handle, const char* name, std::string fallback) {
@@ -2043,6 +2071,7 @@ OverviewController::~OverviewController() {
     setDamageTrackingOverride(false);
     destroyGaussianBlurPipeline();
     clearToggleSwitchReleasePollTimer();
+    clearPickLabelPrefixState();
     clearRegisteredTrackpadGestures();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
@@ -2897,7 +2926,13 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         return;
 
     const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
-    bool               handled = true;
+
+    if (handlePickLabelKey(keysym)) {
+        info.cancelled = true;
+        return;
+    }
+
+    bool handled = true;
     switch (keysym) {
         case XKB_KEY_Escape:
             beginClose();
@@ -4019,6 +4054,14 @@ bool OverviewController::barSingleMissionControlEnabled() const {
 
 bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
+}
+
+bool OverviewController::pickLabelsEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:pick_labels_enabled", 0) != 0;
+}
+
+bool OverviewController::pickLabelsDirectActivateEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:pick_labels_direct_activate", 0) != 0;
 }
 
 double OverviewController::focusHoverThickness() const {
@@ -6809,6 +6852,17 @@ std::vector<Rect> OverviewController::targetRects() const {
     return rects;
 }
 
+std::vector<std::size_t> OverviewController::pickOrderForCurrentState() const {
+    std::vector<std::size_t> monitorRanks(m_state.windows.size());
+
+    for (std::size_t i = 0; i < m_state.windows.size(); ++i) {
+        const auto it = std::find(m_state.participatingMonitors.begin(), m_state.participatingMonitors.end(), m_state.windows[i].targetMonitor);
+        monitorRanks[i] = static_cast<std::size_t>(std::distance(m_state.participatingMonitors.begin(), it));
+    }
+
+    return computePickOrder(targetRects(), monitorRanks);
+}
+
 Rect OverviewController::workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const {
     if (!monitor || !workspaceStripEnabled(state))
         return {};
@@ -9509,6 +9563,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
+    clearPickLabelPrefixState();
     m_primaryButtonPressed = false;
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
@@ -9911,6 +9966,7 @@ void OverviewController::deactivate() {
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
+    clearPickLabelPrefixState();
     clearHiddenStripLayerProxies();
     restoreOverviewRenderState();
     deactivateHooks();
@@ -10732,6 +10788,76 @@ void OverviewController::activateSelection() {
     beginClose(CloseMode::ActivateSelection);
 }
 
+void OverviewController::resolvePickSelection(std::size_t orderIndex) {
+    const auto order = pickOrderForCurrentState();
+    if (orderIndex >= order.size() || order[orderIndex] >= m_state.windows.size())
+        return; // no window at that pick order; the key is still swallowed by the caller
+
+    m_state.selectedIndex = order[orderIndex];
+    syncFocusDuringOverviewFromSelection(true, "keyboard-pick");
+
+    if (pickLabelsDirectActivateEnabled())
+        activateSelection();
+    else
+        damageOwnedMonitors();
+}
+
+void OverviewController::armPickLabelPrefixTimeout() {
+    armOrRescheduleTimer(m_pickLetterPrefixTimer, PICK_LABEL_PREFIX_TIMEOUT,
+                          [this](SP<CEventLoopTimer>, void*) { m_pendingPickLetterGroup.reset(); });
+}
+
+void OverviewController::clearPickLabelPrefixState() {
+    m_pendingPickLetterGroup.reset();
+    cancelAndClearTimer(m_pickLetterPrefixTimer);
+}
+
+bool OverviewController::pickLabelsInteractionAllowed() const {
+    if (!pickLabelsEnabled() || m_state.windows.size() < 2 || m_state.phase != Phase::Active)
+        return false;
+
+    return !m_draggedWindowIndex && !m_pressedWindowIndex && !m_pressedStripIndex;
+}
+
+bool OverviewController::handlePickLabelKey(xkb_keysym_t keysym) {
+    if (!pickLabelsInteractionAllowed())
+        return false;
+
+    std::optional<int> digit;
+    if (keysym >= XKB_KEY_1 && keysym <= XKB_KEY_9)
+        digit = static_cast<int>(keysym - XKB_KEY_0);
+    else if (keysym >= XKB_KEY_KP_1 && keysym <= XKB_KEY_KP_9)
+        digit = static_cast<int>(keysym - XKB_KEY_KP_0);
+
+    std::optional<int> letter;
+    if (keysym >= XKB_KEY_a && keysym <= XKB_KEY_z)
+        letter = static_cast<int>(keysym - XKB_KEY_a);
+    else if (keysym >= XKB_KEY_A && keysym <= XKB_KEY_Z)
+        letter = static_cast<int>(keysym - XKB_KEY_A);
+
+    if (m_pendingPickLetterGroup) {
+        const int group = *m_pendingPickLetterGroup;
+        clearPickLabelPrefixState();
+        if (!digit)
+            return false; // an invalid completion cancels the prefix but leaves the key itself unhandled
+        resolvePickSelection(computePickOrderIndex(*digit, group));
+        return true;
+    }
+
+    if (digit) {
+        resolvePickSelection(computePickOrderIndex(*digit, std::nullopt));
+        return true;
+    }
+
+    if (letter) {
+        m_pendingPickLetterGroup = *letter;
+        armPickLabelPrefixTimeout();
+        return true;
+    }
+
+    return false;
+}
+
 void OverviewController::clearStripWindowDragState() {
     m_pressedStripIndex.reset();
     m_pressedWindowIndex.reset();
@@ -11148,6 +11274,63 @@ void OverviewController::renderSelectionChrome() const {
         }
     }
 
+}
+
+void OverviewController::renderPickLabels() const {
+    if (!pickLabelsInteractionAllowed())
+        return;
+
+    const double progress = visualProgress();
+    if (progress <= 0.0)
+        return;
+
+    const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    if (!renderMonitor)
+        return;
+
+    const auto       order = pickOrderForCurrentState();
+    const CHyprColor textColor = colorWithAlphaMultiplier(closeButtonGlyphColor(), progress);
+    const CHyprColor chipColor = colorWithAlphaMultiplier(closeButtonColor(), progress);
+    const double     fontSize = std::max(10.0, closeButtonSize() * 0.7);
+
+    for (std::size_t orderIndex = 0; orderIndex < order.size(); ++orderIndex) {
+        const std::size_t windowIndex = order[orderIndex];
+        if (windowIndex >= m_state.windows.size())
+            continue;
+
+        const auto& managed = m_state.windows[windowIndex];
+        if (managed.targetMonitor != renderMonitor)
+            continue;
+
+        const std::string label = computePickLabel(orderIndex);
+        if (label.empty())
+            continue;
+
+        const Rect rectGlobal = currentPreviewRect(managed);
+        const Rect rectLocal  = rectToMonitorRenderLocal(rectGlobal, renderMonitor);
+
+        // Same eligibility ratio as closeButtonRectFor(): skip badges on previews too
+        // small to hold them without spilling onto a neighboring preview. This also
+        // keeps densely packed Thumbnail-engine cards from turning into label clutter.
+        if (rectLocal.width < fontSize * 4.0 || rectLocal.height < fontSize * 4.0)
+            continue;
+
+        auto texture = g_pHyprRenderer->renderText(label, textColor, scaleFontSizeForRender(renderMonitor, fontSize), false, "", static_cast<int>(rectLocal.width));
+        if (!texture)
+            continue;
+
+        // Top-right corner: closeButtonRectFor() anchors on the top-left, so this
+        // side stays free of collision regardless of close_button_enabled.
+        const double pad = scaleLengthForRender(renderMonitor, 4.0);
+        const double chipW = texture->m_size.x + pad * 2.0;
+        const double chipH = texture->m_size.y + pad * 2.0;
+        const Rect   chipLocal = makeRect(rectLocal.x + rectLocal.width - chipW - pad, rectLocal.y + pad, chipW, chipH);
+
+        g_pHyprOpenGL->renderRect(toBox(chipLocal), chipColor, {.round = static_cast<int>(pad)});
+
+        const Rect textLocal = makeRect(chipLocal.x + pad, chipLocal.y + pad, texture->m_size.x, texture->m_size.y);
+        g_pHyprOpenGL->renderTexture(texture, toBox(textLocal), {});
+    }
 }
 
 void OverviewController::renderCloseButtons() const {
