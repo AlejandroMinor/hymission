@@ -197,7 +197,6 @@ constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr double DRAG_PREVIEW_SCALE = 0.65;
 constexpr auto   DRAG_PREVIEW_SHRINK_DURATION = std::chrono::milliseconds(120);
-constexpr auto   STRIP_DROP_PREVIEW_TRANSITION_DURATION = std::chrono::milliseconds(140);
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
 // motion toward a target would dwell on intermediate windows just long
@@ -2672,7 +2671,6 @@ void OverviewController::handleMouseMove() {
                 m_draggedWindowIndex = m_pressedWindowIndex;
                 m_draggedWindowPointerOffset = Vector2D{pointer.x - rect.x, pointer.y - rect.y};
                 m_draggedWindowStart = std::chrono::steady_clock::now();
-                captureDraggedWindowTexture();
             }
         }
 
@@ -3149,13 +3147,6 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
 
     if (rawWindowRenderActive())
         return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
-
-    // Once the drag texture exists, the regular overview pass must stop
-    // emitting the same window. The independent texture is composited by the
-    // overlay after the strip, so allowing both paths produces two previews.
-    if (m_draggedWindowTexture && !m_stripPreviewContext.active && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size() &&
-        m_state.windows[*m_draggedWindowIndex].window == window)
-        return false;
 
     if (isVisible() && window && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor) {
         if (debugLogsEnabled()) {
@@ -10852,7 +10843,6 @@ void OverviewController::clearStripWindowDragState() {
     m_pressedWindowIndex.reset();
     m_draggedWindowIndex.reset();
     m_dragSettlement.reset();
-    m_draggedWindowTexture.reset();
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
     m_draggedWindowStart = {};
@@ -11276,50 +11266,30 @@ void OverviewController::renderDraggedWindowPreview() const {
     if (!dragged.window || !dragged.targetMonitor)
         return;
 
+    const auto target = draggedPreviewTargetFor(dragged.window);
+    if (!target)
+        return;
+
     const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
     if (!renderMonitor || renderMonitor != dragged.targetMonitor)
         return;
 
-    const Rect preview = draggedPreviewRectFor(dragged.window).value_or(Rect{});
-    if (m_draggedWindowTexture && preview.width > 0.0 && preview.height > 0.0) {
-        const Rect local = rectToMonitorRenderLocal(preview, renderMonitor);
-        double alpha = 1.0;
-        if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
-            const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
-            if (entry.monitor == renderMonitor && entry.snapshot && entry.snapshot->dropPreview) {
-                if (const auto target = draggedPreviewTargetFor(dragged.window); target)
-                    alpha = 1.0 - target->blend;
-            }
-        }
-        if (alpha > 0.001)
-            g_pHyprOpenGL->renderTexture(m_draggedWindowTexture, toBox(local), {.a = static_cast<float>(alpha)});
-        return;
+    using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+    static RenderWindowFn renderWindowFn = nullptr;
+    static bool           renderWindowResolved = false;
+    if (!renderWindowResolved) {
+        renderWindowResolved = true;
+        renderWindowFn = reinterpret_cast<RenderWindowFn>(findFunction("renderWindow", "IHyprRenderer::renderWindow"));
+        if (!renderWindowFn)
+            debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for drag preview");
     }
 
-    // If retaining the surface texture failed, shouldRenderWindowHook keeps the
-    // regular overview window alive. Do not render it a second time here.
-}
-
-void OverviewController::captureDraggedWindowTexture() {
-    m_draggedWindowTexture.reset();
-    if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !g_pHyprRenderer || !g_pHyprOpenGL)
-        return;
-
-    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
-    if (!dragged.window || m_stripSnapshotRenderDepth > 0)
-        return;
-
-    const auto surface = dragged.window->resource();
-    if (!surface || !surface->m_current.texture) {
-        debugLog("[hymission] unable to retain dragged window surface texture");
-        return;
+    if (renderWindowFn) {
+        const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
+        g_pHyprRenderer->m_bRenderingSnapshot = true;
+        renderWindowFn(g_pHyprRenderer.get(), dragged.window, renderMonitor, Time::steadyNow(), false, Render::RENDER_PASS_ALL, false, true);
+        g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
     }
-
-    // Retain the already-rendered surface content instead of entering a nested
-    // window render from the pointer callback. Holding this shared texture
-    // freezes a stable drag image even if the client submits a newer buffer.
-    m_draggedWindowTexture = surface->m_current.texture;
-    setTextureLinearFiltering(m_draggedWindowTexture);
 }
 
 void OverviewController::renderCloseButtons() const {
@@ -11419,17 +11389,6 @@ Rect OverviewController::workspaceStripThumbRect(const WorkspaceStripEntry& entr
 }
 
 void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry) {
-    const bool entryIsHoveredDragTarget = [&] {
-        if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !m_state.hoveredStripIndex ||
-            *m_state.hoveredStripIndex >= m_state.stripEntries.size())
-            return false;
-
-        const auto& dragged = m_state.windows[*m_draggedWindowIndex];
-        const auto& hovered = m_state.stripEntries[*m_state.hoveredStripIndex];
-        return dragged.window && dragged.targetMonitor == entry.monitor && hovered.monitor == entry.monitor && &hovered == &entry &&
-            (!hovered.workspace || hovered.workspace != dragged.window->m_workspace);
-    }();
-    const auto previousSnapshot = entry.snapshot;
     entry.snapshot.reset();
 
     if (!entry.monitor || entry.newWorkspaceSlot)
@@ -11481,6 +11440,16 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         previewState.relayoutProgress = 1.0;
         previewState.relayoutActive = false;
 
+        const bool entryIsHoveredDragTarget = [&] {
+            if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !m_state.hoveredStripIndex ||
+                *m_state.hoveredStripIndex >= m_state.stripEntries.size())
+                return false;
+
+            const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+            const auto& hovered = m_state.stripEntries[*m_state.hoveredStripIndex];
+            return dragged.window && dragged.targetMonitor == monitor && hovered.monitor == monitor && &hovered == &entry &&
+                (!hovered.workspace || hovered.workspace != dragged.window->m_workspace);
+        }();
         if (entryIsHoveredDragTarget) {
             const auto& dragged = m_state.windows[*m_draggedWindowIndex];
             const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(dragged.window, shouldUseGoalGeometryForStateSnapshot(dragged.window));
@@ -11797,12 +11766,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
     --m_stripSnapshotRenderDepth;
 
-    snapshot->dropPreview = entryIsHoveredDragTarget;
-    if (previousSnapshot && previousSnapshot->framebuffer && previousSnapshot->framebuffer->isAllocated() &&
-        previousSnapshot->dropPreview != snapshot->dropPreview) {
-        snapshot->previousFramebuffer = previousSnapshot->framebuffer;
-        snapshot->transitionStart = std::chrono::steady_clock::now();
-    }
     entry.snapshot = std::move(snapshot);
 }
 
@@ -11898,20 +11861,7 @@ void OverviewController::renderWorkspaceStrip() const {
         g_pHyprOpenGL->renderRect(toBox(thumbRender), cardColor, {.blur = true, .blurA = 1.0F});
 
         if (!entry.newWorkspaceSlot && entry.snapshot && entry.snapshot->framebuffer && entry.snapshot->framebuffer->isAllocated() && entry.snapshot->framebuffer->getTexture()) {
-            double transition = 1.0;
-            if (entry.snapshot->previousFramebuffer && entry.snapshot->previousFramebuffer->isAllocated() && entry.snapshot->previousFramebuffer->getTexture() &&
-                entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
-                const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
-                const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
-                                             static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_PREVIEW_TRANSITION_DURATION).count()));
-                transition = raw * raw * (3.0 - 2.0 * raw);
-                g_pHyprOpenGL->renderTexture(entry.snapshot->previousFramebuffer->getTexture(), toBox(thumbRender),
-                                              {.a = static_cast<float>(std::clamp(progress * (1.0 - transition), 0.0, 1.0))});
-                if (transition < 1.0)
-                    g_pHyprRenderer->damageMonitor(renderMonitor);
-            }
-            g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer->getTexture(), toBox(thumbRender),
-                                          {.a = static_cast<float>(std::clamp(progress * transition, 0.0, 1.0))});
+            g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer->getTexture(), toBox(thumbRender), {.a = static_cast<float>(std::clamp(progress, 0.0, 1.0))});
         }
 
         if (stateOverlayColor.a > 0.0) {

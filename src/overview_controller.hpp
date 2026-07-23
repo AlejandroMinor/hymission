@@ -186,11 +186,6 @@ class OverviewController {
     struct WorkspaceStripEntry {
         struct Snapshot {
             SP<Render::IFramebuffer> framebuffer;
-            // The previous image stays alive while a strip target changes so
-            // the card can cross-fade instead of popping to its new layout.
-            SP<Render::IFramebuffer> previousFramebuffer;
-            std::chrono::steady_clock::time_point transitionStart = {};
-            bool dropPreview = false;
         };
 
         struct WindowPreview {
@@ -732,7 +727,6 @@ class OverviewController {
     void renderBackdrop() const;
     void renderSelectionChrome() const;
     void renderDraggedWindowPreview() const;
-    void captureDraggedWindowTexture();
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
     void clearStripWindowDragState();
@@ -872,7 +866,6 @@ class OverviewController {
     std::optional<std::size_t> m_pressedWindowIndex;
     std::optional<std::size_t> m_draggedWindowIndex;
     std::optional<DragSettlement> m_dragSettlement;
-    SP<Render::ITexture>        m_draggedWindowTexture;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};
