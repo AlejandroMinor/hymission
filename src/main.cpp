@@ -65,6 +65,10 @@ SDispatchResult dispatchClose(const std::string&) {
     return g_overviewController ? g_overviewController->close() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
 
+SDispatchResult dispatchFullscreen(const std::string& args) {
+    return g_overviewController ? g_overviewController->fullscreen(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+}
+
 SDispatchResult dispatchDebugCurrentLayout(const std::string&) {
     return g_overviewController ? g_overviewController->debugCurrentLayout() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
@@ -179,6 +183,25 @@ int luaOpen(lua_State* L) {
 
 int luaClose(lua_State* L) {
     return luaDispatchResult(L, dispatchClose(""));
+}
+
+int luaFullscreen(lua_State* L) {
+    std::string mode = "fullscreen";
+    std::string action = "toggle";
+
+    if (lua_gettop(L) >= 1 && !lua_isnil(L, 1)) {
+        if (!lua_istable(L, 1))
+            return luaL_error(L, "hl.plugin.hymission.fullscreen: expected a table or nil");
+
+        mode = luaTableStringField(L, "mode", mode);
+        action = luaTableStringField(L, "action", action);
+    }
+
+    const auto args = hymission::legacyFullscreenDispatcherArguments(mode, action);
+    if (!args)
+        return luaL_error(L, "hl.plugin.hymission.fullscreen: invalid mode or action");
+
+    return luaDispatchResult(L, dispatchFullscreen(*args));
 }
 
 int luaDebugCurrentLayout(lua_State* L) {
@@ -429,6 +452,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("toggle", luaToggle);
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("close", luaClose);
+        registerLuaFunction("fullscreen", luaFullscreen);
         registerLuaFunction("debug_current_layout", luaDebugCurrentLayout);
         registerLuaFunction("dispatch", luaDispatch);
         registerLuaFunction("gesture", luaGesture);

@@ -82,6 +82,7 @@ struct WorkspaceStripReservation {
 [[nodiscard]] std::optional<std::size_t> chooseDirectionalNeighbor(const std::vector<Rect>& rects, std::size_t currentIndex, Direction direction);
 [[nodiscard]] std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t currentIndex, int step = 1);
 [[nodiscard]] std::optional<ToggleArguments> parseToggleArguments(std::string_view value);
+[[nodiscard]] std::optional<std::string>     legacyFullscreenDispatcherArguments(std::string_view mode, std::string_view action);
 [[nodiscard]] Rect                       lerpRect(const Rect& from, const Rect& to, double t);
 [[nodiscard]] double                     easeOutCubic(double t);
 [[nodiscard]] double                     easeInCubic(double t);

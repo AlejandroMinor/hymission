@@ -70,6 +70,7 @@ class OverviewController {
     [[nodiscard]] SDispatchResult open(const std::string& args = {});
     [[nodiscard]] SDispatchResult close();
     [[nodiscard]] SDispatchResult toggle(const std::string& args = {});
+    [[nodiscard]] SDispatchResult fullscreen(const std::string& args = {});
     [[nodiscard]] SDispatchResult debugCurrentLayout() const;
     [[nodiscard]] std::string     overviewStateJson() const;
     [[nodiscard]] std::string     handleRawWindowRenderCommand(const std::string& args);

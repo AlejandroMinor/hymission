@@ -172,6 +172,9 @@ hl.bind("SUPER + S", function()
     hl.plugin.hymission.open("onlycurrentworkspace")
 end)
 hl.bind("SUPER + Escape", hl.plugin.hymission.close)
+hl.bind("SUPER + O", function()
+    hl.plugin.hymission.fullscreen({ mode = "maximized", action = "toggle" })
+end)
 ```
 
 Available functions:
@@ -179,6 +182,7 @@ Available functions:
 - `hl.plugin.hymission.toggle(args?)`
 - `hl.plugin.hymission.open(args?)`
 - `hl.plugin.hymission.close()`
+- `hl.plugin.hymission.fullscreen({ mode = "fullscreen"|"maximized", action = "toggle"|"set"|"unset" })`
 - `hl.plugin.hymission.debug_current_layout()`
 - `hl.plugin.hymission.dispatch(name, args?)`
 - `hl.plugin.hymission.gesture(table|string, disable_inhibit?)`

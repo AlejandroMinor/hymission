@@ -2441,6 +2441,10 @@ SDispatchResult OverviewController::toggle(const std::string& args) {
     return close();
 }
 
+SDispatchResult OverviewController::fullscreen(const std::string& args) {
+    return runHookedDispatcher(PostCloseDispatcher::Fullscreen, args);
+}
+
 SDispatchResult OverviewController::debugCurrentLayout() const {
     const auto monitor = ::State::monitorState()->query().vec(Pointer::mgr()->position()).run();
     if (!monitor) {

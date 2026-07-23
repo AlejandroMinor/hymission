@@ -80,6 +80,18 @@ int main() {
     ok &= expect(!parseToggleArguments("unknown").has_value(), "toggle arguments should reject unknown values");
     ok &= expect(!parseToggleArguments("reverse,reverse").has_value(), "toggle arguments should reject duplicate direction values");
     ok &= expect(!parseToggleArguments("forceall,").has_value(), "toggle arguments should reject empty trailing values");
+    ok &= expect(legacyFullscreenDispatcherArguments("", "") == std::optional<std::string>{"0 toggle"},
+                 "Lua fullscreen arguments should default to fullscreen toggle");
+    ok &= expect(legacyFullscreenDispatcherArguments("maximized", "toggle") == std::optional<std::string>{"1 toggle"},
+                 "Lua fullscreen arguments should map maximized toggle to the legacy dispatcher");
+    ok &= expect(legacyFullscreenDispatcherArguments("FULLSCREEN", "set") == std::optional<std::string>{"0 set"},
+                 "Lua fullscreen arguments should accept case-insensitive mode and actions");
+    ok &= expect(legacyFullscreenDispatcherArguments("1", "unset") == std::optional<std::string>{"1 unset"},
+                 "Lua fullscreen arguments should accept numeric mode aliases");
+    ok &= expect(!legacyFullscreenDispatcherArguments("invalid", "toggle").has_value(),
+                 "Lua fullscreen arguments should reject unknown modes");
+    ok &= expect(!legacyFullscreenDispatcherArguments("fullscreen", "invalid").has_value(),
+                 "Lua fullscreen arguments should reject unknown actions");
 
     const Rect middle = lerpRect({0, 0, 100, 100}, {100, 80, 50, 60}, 0.5);
     ok &= expect(middle.x == 50.0 && middle.y == 40.0 && middle.width == 75.0 && middle.height == 80.0, "lerpRect midpoint should be correct");

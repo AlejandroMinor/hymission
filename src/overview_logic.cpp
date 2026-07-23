@@ -178,6 +178,31 @@ std::optional<ToggleArguments> parseToggleArguments(std::string_view value) {
     return result;
 }
 
+std::optional<std::string> legacyFullscreenDispatcherArguments(std::string_view mode, std::string_view action) {
+    mode = trimAsciiWhitespace(mode);
+    action = trimAsciiWhitespace(action);
+
+    const char* legacyMode = nullptr;
+    if (mode.empty() || equalsAsciiInsensitive(mode, "fullscreen") || mode == "0")
+        legacyMode = "0";
+    else if (equalsAsciiInsensitive(mode, "maximized") || mode == "1")
+        legacyMode = "1";
+    else
+        return std::nullopt;
+
+    const char* legacyAction = nullptr;
+    if (action.empty() || equalsAsciiInsensitive(action, "toggle"))
+        legacyAction = "toggle";
+    else if (equalsAsciiInsensitive(action, "set"))
+        legacyAction = "set";
+    else if (equalsAsciiInsensitive(action, "unset"))
+        legacyAction = "unset";
+    else
+        return std::nullopt;
+
+    return std::string{legacyMode} + " " + legacyAction;
+}
+
 Rect lerpRect(const Rect& from, const Rect& to, double t) {
     const double clamped = clampUnit(t);
     return {
