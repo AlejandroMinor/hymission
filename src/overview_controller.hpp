@@ -168,6 +168,12 @@ class OverviewController {
         eFullscreenMode originalFullscreenMode = FSMODE_NONE;
     };
 
+    struct FullscreenAlphaBackup {
+        PHLWINDOW window;
+        float     value = 1.0F;
+        float     goal = 1.0F;
+    };
+
     struct ManagedWindow {
         PHLWINDOW    window;
         PHLMONITOR   targetMonitor;
@@ -862,6 +868,7 @@ class OverviewController {
     WorkspaceTransition      m_workspaceTransition;
     std::vector<WorkspaceTransitionRenderStateBackup> m_workspaceTransitionRenderStateBackups;
     std::vector<WorkspaceTransitionRenderStateBackup> m_overviewRenderStateBackups;
+    std::vector<FullscreenAlphaBackup> m_fullscreenAlphaBackups;
     StripPreviewContext      m_stripPreviewContext;
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;

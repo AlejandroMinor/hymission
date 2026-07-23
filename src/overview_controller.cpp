@@ -214,6 +214,16 @@ constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__
 constexpr auto   HYPRBARS_PASS_ELEMENT_NAME = "CBarPassElement";
 OverviewController* g_controller = nullptr;
 
+float overviewPreviewAlphaForWindow(const PHLWINDOW& window) {
+    if (!window)
+        return 0.0F;
+
+    // WINDOW_ALPHA_FULLSCREEN is compositor occlusion state, not user-facing
+    // opacity. Hidden siblings of a fullscreen/maximized window must become
+    // opaque again inside overview while fade/layout/rule alpha is preserved.
+    return std::clamp(window->alphaTotalWithout(Desktop::View::WINDOW_ALPHA_FULLSCREEN), 0.0F, 1.0F);
+}
+
 enum class GestureDispatcherKind : uint8_t {
     Toggle,
     Open,
@@ -9562,8 +9572,6 @@ SDispatchResult OverviewController::runHookedDispatcher(PostCloseDispatcher disp
 
 void OverviewController::setFullscreenRenderOverride(bool suppress) {
     if (suppress) {
-        if (m_state.fullscreenOverrideActive)
-            return;
         m_state.fullscreenOverrideActive = true;
 
         for (const auto& backup : m_state.fullscreenBackups) {
@@ -9573,11 +9581,32 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
                 workspaceMonitor->m_solitaryClient.reset();
         }
 
+        const auto exposeWindow = [&](const PHLWINDOW& window) {
+            if (!window)
+                return;
+
+            auto& alpha = window->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN);
+            const auto existing = std::find_if(m_fullscreenAlphaBackups.begin(), m_fullscreenAlphaBackups.end(),
+                                               [&](const FullscreenAlphaBackup& backup) { return backup.window == window; });
+            const bool alreadyBackedUp = existing != m_fullscreenAlphaBackups.end();
+            const bool needsOverride = std::abs(alpha->value() - 1.0F) > 0.0001F || std::abs(alpha->goal() - 1.0F) > 0.0001F;
+            if (!alreadyBackedUp && needsOverride) {
+                m_fullscreenAlphaBackups.push_back({.window = window, .value = alpha->value(), .goal = alpha->goal()});
+            }
+
+            if (needsOverride) {
+                alpha->setValueAndWarp(1.0F);
+                *alpha = 1.0F;
+            }
+        };
+
+        for (const auto& managed : m_state.windows)
+            exposeWindow(managed.window);
+        for (const auto& managed : m_state.transientClosingWindows)
+            exposeWindow(managed.window);
+
         return;
     }
-
-    if (!m_state.fullscreenOverrideActive)
-        return;
 
     for (const auto& backup : m_state.fullscreenBackups) {
         if (!backup.workspace || !backup.originalFullscreenWindow || backup.originalFullscreenMode == FSMODE_NONE)
@@ -9585,6 +9614,17 @@ void OverviewController::setFullscreenRenderOverride(bool suppress) {
         if (const auto workspaceMonitor = backup.workspace->m_monitor.lock())
             workspaceMonitor->m_solitaryClient.reset();
     }
+
+    for (const auto& backup : m_fullscreenAlphaBackups) {
+        if (!backup.window)
+            continue;
+
+        auto& alpha = backup.window->alpha(Desktop::View::WINDOW_ALPHA_FULLSCREEN);
+        alpha->setValueAndWarp(backup.value);
+        if (std::abs(backup.goal - backup.value) > 0.0001F)
+            *alpha = backup.goal;
+    }
+    m_fullscreenAlphaBackups.clear();
 
     m_state.fullscreenOverrideActive = false;
 }
@@ -11615,7 +11655,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                 .relayoutFromGlobal = naturalGlobal,
                 .targetGlobal = naturalGlobal,
                 .slot = {.index = index},
-                .previewAlpha = std::clamp(dragged.window->alphaTotal(), 0.0F, 1.0F),
+                .previewAlpha = overviewPreviewAlphaForWindow(dragged.window),
                 .isFloating = dragged.window->m_isFloating,
                 .isPinned = dragged.window->m_pinned,
             });
@@ -12296,7 +12336,7 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
         const auto naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
-        const auto previewAlpha = std::clamp(window->alphaTotal(), 0.0F, 1.0F);
+        const auto previewAlpha = overviewPreviewAlphaForWindow(window);
         const auto targetMonitor = preferredMonitorForWindow(window, state);
 
         for (auto& entry : state.stripEntries) {
@@ -12716,7 +12756,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .title = window->m_title,
             .naturalGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
             .exitGlobal = directNiriSlot ? directNiriSourceGlobal : naturalGlobal,
-            .previewAlpha = std::clamp(window->alphaTotal(), 0.0F, 1.0F),
+            .previewAlpha = overviewPreviewAlphaForWindow(window),
             .isFloating = window->m_isFloating,
             .isPinned = window->m_pinned,
             .isNiriFloatingOverlay = directNiriFloatingOverlay,
