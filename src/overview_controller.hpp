@@ -225,6 +225,17 @@ class OverviewController {
         Rect      preview;
     };
 
+    struct DropAnimation {
+        PHLWINDOW                             window;
+        PHLMONITOR                            monitor;
+        SP<Render::ITexture>                  texture;
+        WORKSPACEID                           workspaceId = WORKSPACE_INVALID;
+        Rect                                  from;
+        Rect                                  to;
+        double                                initialDim = 1.0;
+        std::chrono::steady_clock::time_point start = {};
+    };
+
     struct State {
         Phase                                  phase = Phase::Inactive;
         PHLMONITOR                             ownerMonitor;
@@ -630,8 +641,11 @@ class OverviewController {
     [[nodiscard]] std::optional<std::size_t> hitTestThumbnailDropTarget(double x, double y, std::size_t draggedIndex) const;
     [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
     [[nodiscard]] std::optional<DragPreviewTarget> draggedPreviewTargetFor(const PHLWINDOW& window) const;
-    [[nodiscard]] std::optional<Rect>        draggedPreviewRectFor(const PHLWINDOW& window) const;
-    [[nodiscard]] double       draggedPreviewScale() const;
+    [[nodiscard]] std::optional<Rect>              draggedPreviewRectFor(const PHLWINDOW& window) const;
+    [[nodiscard]] double                           draggedPreviewScale() const;
+    [[nodiscard]] double                           dropAnimationProgress() const;
+    [[nodiscard]] bool                             dropAnimationMatchesEntry(const WorkspaceStripEntry& entry) const;
+    void                                           updateDropAnimation();
     [[nodiscard]] bool                       placeNewWindowInHoveredThumbnailWorkspace(const PHLWINDOW& window);
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
@@ -870,10 +884,13 @@ class OverviewController {
     bool                     m_closeButtonPressLatched = false; // swallow release after close-button click
     bool                     m_closeCursorOverride = false;     // forcing the "pointer" cursor while hover
     std::optional<std::size_t> m_pressedStripIndex;
-    std::optional<std::size_t> m_pressedWindowIndex;
-    std::optional<std::size_t> m_draggedWindowIndex;
+    std::optional<std::size_t>   m_pressedWindowIndex;
+    std::optional<std::size_t>   m_draggedWindowIndex;
     std::optional<DragSettlement> m_dragSettlement;
-    SP<Render::ITexture>        m_draggedWindowTexture;
+    std::optional<DropAnimation>  m_dropAnimation;
+    SP<Render::ITexture>          m_draggedWindowTexture;
+    std::optional<std::size_t>    m_dragDimStripIndex;
+    std::chrono::steady_clock::time_point m_dragDimStart = {};
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};

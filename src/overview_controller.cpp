@@ -197,7 +197,9 @@ constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr double DRAG_PREVIEW_SCALE = 0.65;
 constexpr auto   DRAG_PREVIEW_SHRINK_DURATION = std::chrono::milliseconds(120);
-constexpr auto   STRIP_DROP_PREVIEW_TRANSITION_DURATION = std::chrono::milliseconds(140);
+constexpr auto   STRIP_DRAG_DIM_DURATION = std::chrono::milliseconds(110);
+constexpr auto   STRIP_DROP_ANIMATION_DURATION = std::chrono::milliseconds(220);
+constexpr double STRIP_DRAG_DIM_ALPHA = 0.28;
 // Cursor must hover-pause on a candidate window for this long before the
 // expand-on-hover relayout kicks in. 48ms was short enough that fast mouse
 // motion toward a target would dwell on intermediate windows just long
@@ -2608,6 +2610,7 @@ void OverviewController::renderStage(eRenderStage stage) {
     expandRenderDamageToFullMonitor(monitor);
 
     if (stage == RENDER_POST_WALLPAPER) {
+        updateDropAnimation();
         updateOverviewWorkspaceTransition();
         updateAnimation();
         flushQueuedSelectionRetargetDuringOverview();
@@ -2626,7 +2629,7 @@ void OverviewController::renderStage(eRenderStage stage) {
             m_stripSnapshotsDirty = true;
             scheduleWorkspaceStripSnapshotRefresh();
         }
-        if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 ||
+        if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 || m_dropAnimation ||
              (m_draggedWindowIndex && draggedPreviewScale() > DRAG_PREVIEW_SCALE + 0.001)) &&
             !m_deactivatePending) {
             damageOwnedMonitors();
@@ -2669,9 +2672,12 @@ void OverviewController::handleMouseMove() {
             if (distance >= 14.0) {
                 const auto& managed = m_state.windows[*m_pressedWindowIndex];
                 const Rect  rect = currentPreviewRect(managed);
+                m_dropAnimation.reset();
                 m_draggedWindowIndex = m_pressedWindowIndex;
                 m_draggedWindowPointerOffset = Vector2D{pointer.x - rect.x, pointer.y - rect.y};
                 m_draggedWindowStart = std::chrono::steady_clock::now();
+                m_dragDimStripIndex = m_state.hoveredStripIndex;
+                m_dragDimStart = m_dragDimStripIndex ? m_draggedWindowStart : std::chrono::steady_clock::time_point{};
                 captureDraggedWindowTexture();
             }
         }
@@ -2784,6 +2790,16 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const auto  hoveredStripIndex = m_state.hoveredStripIndex;
             const auto  thumbnailDropIndex = hitTestThumbnailDropTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y, draggedIndex);
             const auto  draggedPreview = window ? draggedPreviewRectFor(window) : std::optional<Rect>{};
+            const auto  stripDropTarget = window && hoveredStripIndex ? draggedPreviewTargetFor(window) : std::optional<DragPreviewTarget>{};
+            const auto  dropTexture = m_draggedWindowTexture;
+            const auto  dropMonitor = m_state.windows[draggedIndex].targetMonitor;
+            double      dropInitialDim = 1.0;
+            if (m_dragDimStart != std::chrono::steady_clock::time_point{}) {
+                const auto elapsed = std::chrono::steady_clock::now() - m_dragDimStart;
+                const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                                             static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DRAG_DIM_DURATION).count()));
+                dropInitialDim = raw * raw * (3.0 - 2.0 * raw);
+            }
             PHLWORKSPACE targetWorkspace;
             clearStripWindowDragState();
 
@@ -2804,6 +2820,18 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 const auto sourceWorkspace = window->m_workspace;
                 if (draggedPreview)
                     m_dragSettlement = DragSettlement{.window = window, .preview = *draggedPreview};
+                if (draggedPreview && stripDropTarget && dropTexture && dropMonitor) {
+                    m_dropAnimation = DropAnimation{
+                        .window = window,
+                        .monitor = dropMonitor,
+                        .texture = dropTexture,
+                        .workspaceId = targetWorkspace->m_id,
+                        .from = *draggedPreview,
+                        .to = stripDropTarget->preview,
+                        .initialDim = dropInitialDim,
+                        .start = std::chrono::steady_clock::now(),
+                    };
+                }
                 moveWindowToWorkspaceForThumbnailDrop(window, targetWorkspace);
                 refreshWorkspaceLayoutSnapshot(sourceWorkspace, true);
                 refreshWorkspaceLayoutSnapshot(targetWorkspace, true);
@@ -3155,6 +3183,12 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     // overlay after the strip, so allowing both paths produces two previews.
     if (m_draggedWindowTexture && !m_stripPreviewContext.active && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size() &&
         m_state.windows[*m_draggedWindowIndex].window == window)
+        return false;
+
+    // Keep the real overview window hidden until its retained drag texture has
+    // finished shrinking into the destination card. Strip snapshot captures
+    // still render it so the two images can cross-fade without a duplicate.
+    if (m_dropAnimation && m_dropAnimation->texture && !m_stripPreviewContext.active && m_dropAnimation->window == window)
         return false;
 
     if (isVisible() && window && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor) {
@@ -7956,7 +7990,7 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
     const Rect actual = surfaceRenderGlobalRectForWindow(window);
-    const auto previewForArea = [&](const Rect& area, std::optional<Rect> predictedPreview = std::nullopt, double transitionLimit = 1.0) -> std::optional<DragPreviewTarget> {
+    const auto previewForArea = [&](const Rect& area, std::optional<Rect> predictedPreview = std::nullopt) -> std::optional<DragPreviewTarget> {
         if (area.width <= 1.0 || area.height <= 1.0 || !rectContainsPoint(area, pointer.x, pointer.y))
             return std::nullopt;
 
@@ -7970,11 +8004,7 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
         mapped.x = std::clamp(mapped.x, area.x, area.x + area.width - mapped.width);
         mapped.y = std::clamp(mapped.y, area.y, area.y + area.height - mapped.height);
 
-        const double edgeDistance = std::min({pointer.x - area.x, area.x + area.width - pointer.x, pointer.y - area.y, area.y + area.height - pointer.y});
-        const double halfShortEdge = std::max(1.0, std::min(area.width, area.height) * 0.5);
-        const double t = clampUnit(edgeDistance / halfShortEdge);
-        const double blend = std::min(t * t * (3.0 - 2.0 * t), clampUnit(transitionLimit));
-        return DragPreviewTarget{.area = area, .preview = mapped, .blend = blend};
+        return DragPreviewTarget{.area = area, .preview = mapped, .blend = 1.0};
     };
 
     if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
@@ -7982,16 +8012,7 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
         if (entry.monitor == monitor && (!entry.workspace || entry.workspace != window->m_workspace)) {
             const Rect animatedArea = animatedWorkspaceStripRect(entry.rect, monitor);
             std::optional<Rect> predictedPreview;
-            double transitionLimit = 0.0;
             if (entry.snapshot && entry.snapshot->dropPreview) {
-                transitionLimit = 1.0;
-                if (entry.snapshot->previousFramebuffer && entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
-                    const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
-                    const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
-                                                 static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_PREVIEW_TRANSITION_DURATION).count()));
-                    transitionLimit = raw * raw * (3.0 - 2.0 * raw);
-                }
-
                 if (entry.snapshot->dropPreviewRect && entry.rect.width > 0.0 && entry.rect.height > 0.0) {
                     const auto& stored = *entry.snapshot->dropPreviewRect;
                     const double animatedScaleX = animatedArea.width / entry.rect.width;
@@ -8002,7 +8023,7 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
                 }
             }
 
-            if (const auto target = previewForArea(animatedArea, predictedPreview, transitionLimit); target)
+            if (const auto target = previewForArea(animatedArea, predictedPreview); target)
                 return target;
         }
     }
@@ -8057,9 +8078,6 @@ std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& w
     const double offsetY = std::clamp(m_draggedWindowPointerOffset.y / sourcePreview.height, 0.0, 1.0) * sourcePreview.height * scale;
     const Rect following = makeRect(pointer.x - offsetX, pointer.y - offsetY, sourcePreview.width * scale, sourcePreview.height * scale);
 
-    if (const auto target = draggedPreviewTargetFor(window); target)
-        return lerpRect(following, target->preview, target->blend);
-
     return following;
 }
 
@@ -8072,6 +8090,27 @@ double OverviewController::draggedPreviewScale() const {
                                static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(DRAG_PREVIEW_SHRINK_DURATION).count()));
     const double eased = t * t * (3.0 - 2.0 * t);
     return 1.0 + (DRAG_PREVIEW_SCALE - 1.0) * eased;
+}
+
+double OverviewController::dropAnimationProgress() const {
+    if (!m_dropAnimation || m_dropAnimation->start == std::chrono::steady_clock::time_point{})
+        return 1.0;
+
+    const auto elapsed = std::chrono::steady_clock::now() - m_dropAnimation->start;
+    return clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                     static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_ANIMATION_DURATION).count()));
+}
+
+bool OverviewController::dropAnimationMatchesEntry(const WorkspaceStripEntry& entry) const {
+    return m_dropAnimation && entry.monitor && m_dropAnimation->monitor == entry.monitor && entry.workspaceId == m_dropAnimation->workspaceId;
+}
+
+void OverviewController::updateDropAnimation() {
+    if (!m_dropAnimation)
+        return;
+
+    if (!m_dropAnimation->window || !m_dropAnimation->texture || dropAnimationProgress() >= 1.0)
+        m_dropAnimation.reset();
 }
 
 PHLWORKSPACE OverviewController::thumbnailWorkspaceAtPoint(double x, double y) const {
@@ -9642,6 +9681,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_workspaceChangeHandlingScheduled = false;
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
+    m_dropAnimation.reset();
     clearStripWindowDragState();
     m_primaryButtonPressed = false;
     next.phase = Phase::Opening;
@@ -10044,6 +10084,7 @@ void OverviewController::deactivate() {
     m_workspaceChangeHandlingScheduled = false;
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
+    m_dropAnimation.reset();
     clearStripWindowDragState();
     clearHiddenStripLayerProxies();
     restoreOverviewRenderState();
@@ -10405,6 +10446,16 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
             m_state.hoveredIndex = hitTestThumbnailDropTarget(pointer.x, pointer.y, *m_draggedWindowIndex);
     } else {
         m_state.hoveredIndex = m_state.hoveredStripIndex ? std::optional<std::size_t>{} : hitTestTarget(pointer.x, pointer.y);
+    }
+
+    if (draggingWindow) {
+        if (m_dragDimStripIndex != m_state.hoveredStripIndex) {
+            m_dragDimStripIndex = m_state.hoveredStripIndex;
+            m_dragDimStart = m_dragDimStripIndex ? now : std::chrono::steady_clock::time_point{};
+        }
+    } else {
+        m_dragDimStripIndex.reset();
+        m_dragDimStart = {};
     }
 
     // Cursor: switch to "pointer" while hovering a close button, restore
@@ -10876,6 +10927,8 @@ void OverviewController::clearStripWindowDragState() {
     m_draggedWindowIndex.reset();
     m_dragSettlement.reset();
     m_draggedWindowTexture.reset();
+    m_dragDimStripIndex.reset();
+    m_dragDimStart = {};
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
     m_draggedWindowStart = {};
@@ -11292,65 +11345,72 @@ void OverviewController::renderSelectionChrome() const {
 }
 
 void OverviewController::renderDraggedWindowPreview() const {
-    if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
-        return;
+    PHLWINDOW            window;
+    PHLMONITOR           monitor;
+    SP<Render::ITexture> texture;
+    Rect                 preview;
+    double               alpha = 1.0;
+    double               decorationScale = 1.0;
 
-    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
-    if (!dragged.window || !dragged.targetMonitor)
+    if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
+        const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+        window = dragged.window;
+        monitor = dragged.targetMonitor;
+        texture = m_draggedWindowTexture;
+        preview = draggedPreviewRectFor(window).value_or(Rect{});
+    } else if (m_dropAnimation && m_dropAnimation->window && m_dropAnimation->monitor && m_dropAnimation->texture) {
+        window = m_dropAnimation->window;
+        monitor = m_dropAnimation->monitor;
+        texture = m_dropAnimation->texture;
+
+        const double raw = dropAnimationProgress();
+        const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
+        const double blend = raw * raw * (3.0 - 2.0 * raw);
+        preview = lerpRect(m_dropAnimation->from, m_dropAnimation->to, motion);
+        alpha = 1.0 - blend;
+        if (m_dropAnimation->from.width > 0.0 && m_dropAnimation->from.height > 0.0) {
+            decorationScale = std::max(0.0, std::min(preview.width / m_dropAnimation->from.width,
+                                                     preview.height / m_dropAnimation->from.height));
+        }
+    }
+
+    if (!window || !monitor || !texture || preview.width <= 0.0 || preview.height <= 0.0 || alpha <= 0.001)
         return;
 
     const auto renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
-    if (!renderMonitor || renderMonitor != dragged.targetMonitor)
+    if (!renderMonitor || renderMonitor != monitor)
         return;
 
-    const Rect preview = draggedPreviewRectFor(dragged.window).value_or(Rect{});
-    if (m_draggedWindowTexture && preview.width > 0.0 && preview.height > 0.0) {
-        const Rect local = rectToMonitorRenderLocal(preview, renderMonitor);
-        double alpha = 1.0;
-        if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
-            const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
-            if (entry.monitor == renderMonitor && entry.snapshot && entry.snapshot->dropPreview) {
-                if (const auto target = draggedPreviewTargetFor(dragged.window); target)
-                    alpha = 1.0 - target->blend;
-            }
-        }
-        if (alpha > 0.001) {
-            const double renderScale = renderScaleForMonitor(renderMonitor);
-            const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(dragged.window->rounding()) * renderScale)));
-            const float roundingPower = static_cast<float>(dragged.window->roundingPower());
-            g_pHyprOpenGL->renderTexture(m_draggedWindowTexture, toBox(local),
-                                         {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
+    const Rect local = rectToMonitorRenderLocal(preview, renderMonitor);
+    const double renderScale = renderScaleForMonitor(renderMonitor);
+    const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * renderScale * decorationScale)));
+    const float roundingPower = static_cast<float>(window->roundingPower());
+    g_pHyprOpenGL->renderTexture(texture, toBox(local), {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
 
-            const int borderSize = std::max(0, static_cast<int>(std::lround(overviewBorderOutsetForWindow(dragged.window) * renderScale)));
-            if (borderSize > 0) {
-                auto grad = dragged.window->m_realBorderColor;
-                auto previousGrad = dragged.window->m_realBorderColorPrevious;
-                const bool animated = dragged.window->m_borderFadeAnimationProgress && dragged.window->m_borderFadeAnimationProgress->isBeingAnimated();
-                if (dragged.window->m_borderAngleAnimationProgress && dragged.window->m_borderAngleAnimationProgress->enabled()) {
-                    grad.m_angle += dragged.window->m_borderAngleAnimationProgress->value() * M_PI * 2.0;
-                    grad.m_angle = normalizeAngleRad(grad.m_angle);
-                    if (animated)
-                        previousGrad.m_angle = grad.m_angle;
-                }
-
-                Render::GL::CHyprOpenGLImpl::SBorderRenderData borderData{
-                    .round = rounding,
-                    .roundingPower = roundingPower,
-                    .borderSize = borderSize,
-                    .a = managedPreviewAlphaFor(dragged.window, static_cast<float>(alpha)),
-                    .outerRound = rounding + borderSize,
-                };
-                if (animated)
-                    g_pHyprOpenGL->renderBorder(toBox(local), previousGrad, grad, dragged.window->m_borderFadeAnimationProgress->value(), borderData);
-                else
-                    g_pHyprOpenGL->renderBorder(toBox(local), grad, borderData);
-            }
+    const int borderSize = std::max(0, static_cast<int>(std::lround(overviewBorderOutsetForWindow(window) * renderScale * decorationScale)));
+    if (borderSize > 0) {
+        auto grad = window->m_realBorderColor;
+        auto previousGrad = window->m_realBorderColorPrevious;
+        const bool animated = window->m_borderFadeAnimationProgress && window->m_borderFadeAnimationProgress->isBeingAnimated();
+        if (window->m_borderAngleAnimationProgress && window->m_borderAngleAnimationProgress->enabled()) {
+            grad.m_angle += window->m_borderAngleAnimationProgress->value() * M_PI * 2.0;
+            grad.m_angle = normalizeAngleRad(grad.m_angle);
+            if (animated)
+                previousGrad.m_angle = grad.m_angle;
         }
-        return;
+
+        Render::GL::CHyprOpenGLImpl::SBorderRenderData borderData{
+            .round = rounding,
+            .roundingPower = roundingPower,
+            .borderSize = borderSize,
+            .a = managedPreviewAlphaFor(window, static_cast<float>(alpha)),
+            .outerRound = rounding + borderSize,
+        };
+        if (animated)
+            g_pHyprOpenGL->renderBorder(toBox(local), previousGrad, grad, window->m_borderFadeAnimationProgress->value(), borderData);
+        else
+            g_pHyprOpenGL->renderBorder(toBox(local), grad, borderData);
     }
-
-    // If retaining the surface texture failed, shouldRenderWindowHook keeps the
-    // regular overview window alive. Do not render it a second time here.
 }
 
 void OverviewController::captureDraggedWindowTexture() {
@@ -11872,10 +11932,22 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
     --m_stripSnapshotRenderDepth;
 
     snapshot->dropPreview = entryIsHoveredDragTarget;
-    if (previousSnapshot && previousSnapshot->framebuffer && previousSnapshot->framebuffer->isAllocated() &&
-        previousSnapshot->dropPreview != snapshot->dropPreview) {
-        snapshot->previousFramebuffer = previousSnapshot->framebuffer;
-        snapshot->transitionStart = std::chrono::steady_clock::now();
+    if (previousSnapshot && previousSnapshot->framebuffer && previousSnapshot->framebuffer->isAllocated()) {
+        const bool retainedPreDrop = previousSnapshot->previousFramebuffer && previousSnapshot->previousFramebuffer->isAllocated();
+        if ((snapshot->dropPreview && previousSnapshot->dropPreview && retainedPreDrop) ||
+            (dropAnimationMatchesEntry(entry) && retainedPreDrop)) {
+            // Continuous snapshot refreshes must not replace the base image
+            // while a hover or release transition is still using it.
+            snapshot->previousFramebuffer = previousSnapshot->previousFramebuffer;
+            snapshot->transitionStart = dropAnimationMatchesEntry(entry) ? m_dropAnimation->start : previousSnapshot->transitionStart;
+        } else if (previousSnapshot->dropPreview != snapshot->dropPreview) {
+            // A hover preview is prepared off-screen but stays visually hidden
+            // until release. When leaving that preview, cross-fade from its
+            // saved pre-drop image instead of flashing the prepared layout.
+            snapshot->previousFramebuffer = previousSnapshot->dropPreview && retainedPreDrop ?
+                previousSnapshot->previousFramebuffer : previousSnapshot->framebuffer;
+            snapshot->transitionStart = dropAnimationMatchesEntry(entry) ? m_dropAnimation->start : std::chrono::steady_clock::now();
+        }
     }
     entry.snapshot = std::move(snapshot);
 }
@@ -11949,6 +12021,13 @@ void OverviewController::renderWorkspaceStrip() const {
             continue;
 
         const bool hovered = m_state.hoveredStripIndex && *m_state.hoveredStripIndex == index;
+        const bool draggedHoverTarget = [&] {
+            if (!hovered || !m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
+                return false;
+            const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+            return dragged.window && dragged.targetMonitor == entry.monitor && (!entry.workspace || entry.workspace != dragged.window->m_workspace);
+        }();
+        const bool dropAffected = dropAnimationMatchesEntry(entry);
         const Rect outerGlobal = animatedWorkspaceStripRect(entry.rect, renderMonitor);
         const Rect outer = rectToMonitorLocal(outerGlobal, renderMonitor);
         if (outer.width <= 0.0 || outer.height <= 0.0)
@@ -11963,40 +12042,60 @@ void OverviewController::renderWorkspaceStrip() const {
                                                                              workspaceStripInactiveColor(),
                                                               progress);
         const CHyprColor stateOverlayColor = colorWithAlphaMultiplier(
-            hovered ? workspaceStripHoverTintColor() :
+            hovered && !draggedHoverTarget && !dropAffected ? workspaceStripHoverTintColor() :
             entry.active ? workspaceStripActiveTintColor() :
             entry.newWorkspaceSlot ? CHyprColor(0.0, 0.0, 0.0, 0.0) :
                                      workspaceStripInactiveTintColor(),
             progress);
 
+        double dragDim = 0.0;
+        if (draggedHoverTarget && m_dragDimStripIndex && *m_dragDimStripIndex == index) {
+            const auto elapsed = std::chrono::steady_clock::now() - m_dragDimStart;
+            const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                                         static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DRAG_DIM_DURATION).count()));
+            dragDim = raw * raw * (3.0 - 2.0 * raw);
+            if (raw < 1.0)
+                g_pHyprRenderer->damageMonitor(renderMonitor);
+        } else if (dropAffected) {
+            const double raw = dropAnimationProgress();
+            const double restored = raw * raw * (3.0 - 2.0 * raw);
+            dragDim = m_dropAnimation->initialDim * (1.0 - restored);
+        }
+
         g_pHyprOpenGL->renderRect(toBox(thumbRender), cardColor, {.blur = true, .blurA = 1.0F});
 
         if (!entry.newWorkspaceSlot && entry.snapshot && entry.snapshot->framebuffer && entry.snapshot->framebuffer->isAllocated() && entry.snapshot->framebuffer->getTexture()) {
-            double transition = 1.0;
-            bool transitionAnimating = false;
-            if (entry.snapshot->previousFramebuffer && entry.snapshot->previousFramebuffer->isAllocated() && entry.snapshot->previousFramebuffer->getTexture() &&
-                entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
-                const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
-                const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
-                                             static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_PREVIEW_TRANSITION_DURATION).count()));
-                transition = raw * raw * (3.0 - 2.0 * raw);
-                transitionAnimating = raw < 1.0;
-                if (entry.snapshot->dropPreview && hovered && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
-                    const auto draggedWindow = m_state.windows[*m_draggedWindowIndex].window;
-                    if (const auto target = draggedPreviewTargetFor(draggedWindow); target)
-                        transition = target->blend;
-                }
+            const bool holdPreDropSnapshot = draggedHoverTarget && entry.snapshot->dropPreview && entry.snapshot->previousFramebuffer &&
+                entry.snapshot->previousFramebuffer->isAllocated() && entry.snapshot->previousFramebuffer->getTexture();
+            if (holdPreDropSnapshot) {
                 g_pHyprOpenGL->renderTexture(entry.snapshot->previousFramebuffer->getTexture(), toBox(thumbRender),
-                                              {.a = static_cast<float>(std::clamp(progress * (1.0 - transition), 0.0, 1.0))});
-                if (transitionAnimating)
-                    g_pHyprRenderer->damageMonitor(renderMonitor);
+                                             {.a = static_cast<float>(std::clamp(progress, 0.0, 1.0))});
+            } else {
+                double transition = 1.0;
+                bool transitionAnimating = false;
+                if (entry.snapshot->previousFramebuffer && entry.snapshot->previousFramebuffer->isAllocated() &&
+                    entry.snapshot->previousFramebuffer->getTexture() && entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
+                    const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
+                    const double raw = dropAffected ? dropAnimationProgress() :
+                        clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                                  static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_ANIMATION_DURATION).count()));
+                    transition = raw * raw * (3.0 - 2.0 * raw);
+                    transitionAnimating = raw < 1.0;
+                    g_pHyprOpenGL->renderTexture(entry.snapshot->previousFramebuffer->getTexture(), toBox(thumbRender),
+                                                 {.a = static_cast<float>(std::clamp(progress * (1.0 - transition), 0.0, 1.0))});
+                    if (transitionAnimating)
+                        g_pHyprRenderer->damageMonitor(renderMonitor);
+                }
+                g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer->getTexture(), toBox(thumbRender),
+                                             {.a = static_cast<float>(std::clamp(progress * transition, 0.0, 1.0))});
             }
-            g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer->getTexture(), toBox(thumbRender),
-                                          {.a = static_cast<float>(std::clamp(progress * transition, 0.0, 1.0))});
         }
 
         if (stateOverlayColor.a > 0.0) {
             g_pHyprOpenGL->renderRect(toBox(thumbRender), stateOverlayColor, {});
+        }
+        if (dragDim > 0.001) {
+            g_pHyprOpenGL->renderRect(toBox(thumbRender), CHyprColor(0.0, 0.0, 0.0, STRIP_DRAG_DIM_ALPHA * progress * dragDim), {});
         }
 
         if (entry.newWorkspaceSlot) {
