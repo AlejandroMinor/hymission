@@ -190,6 +190,7 @@ class OverviewController {
             // the card can cross-fade instead of popping to its new layout.
             SP<Render::IFramebuffer> previousFramebuffer;
             std::chrono::steady_clock::time_point transitionStart = {};
+            std::optional<Rect> dropPreviewRect;
             bool dropPreview = false;
         };
 

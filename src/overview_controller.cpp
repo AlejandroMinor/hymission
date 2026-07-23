@@ -7956,14 +7956,15 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
     const Rect actual = surfaceRenderGlobalRectForWindow(window);
-    const auto previewForArea = [&](const Rect& area) -> std::optional<DragPreviewTarget> {
+    const auto previewForArea = [&](const Rect& area, std::optional<Rect> predictedPreview = std::nullopt, double transitionLimit = 1.0) -> std::optional<DragPreviewTarget> {
         if (area.width <= 1.0 || area.height <= 1.0 || !rectContainsPoint(area, pointer.x, pointer.y))
             return std::nullopt;
 
         const double scaleX = area.width / std::max(1.0, static_cast<double>(monitor->m_size.x));
         const double scaleY = area.height / std::max(1.0, static_cast<double>(monitor->m_size.y));
-        Rect mapped = makeRect(area.x + (actual.x - monitor->m_position.x) * scaleX, area.y + (actual.y - monitor->m_position.y) * scaleY,
-                               actual.width * scaleX, actual.height * scaleY);
+        Rect mapped = predictedPreview.value_or(
+            makeRect(area.x + (actual.x - monitor->m_position.x) * scaleX, area.y + (actual.y - monitor->m_position.y) * scaleY,
+                     actual.width * scaleX, actual.height * scaleY));
         mapped.width = std::clamp(mapped.width, 1.0, area.width);
         mapped.height = std::clamp(mapped.height, 1.0, area.height);
         mapped.x = std::clamp(mapped.x, area.x, area.x + area.width - mapped.width);
@@ -7972,14 +7973,36 @@ std::optional<OverviewController::DragPreviewTarget> OverviewController::dragged
         const double edgeDistance = std::min({pointer.x - area.x, area.x + area.width - pointer.x, pointer.y - area.y, area.y + area.height - pointer.y});
         const double halfShortEdge = std::max(1.0, std::min(area.width, area.height) * 0.5);
         const double t = clampUnit(edgeDistance / halfShortEdge);
-        const double blend = t * t * (3.0 - 2.0 * t);
+        const double blend = std::min(t * t * (3.0 - 2.0 * t), clampUnit(transitionLimit));
         return DragPreviewTarget{.area = area, .preview = mapped, .blend = blend};
     };
 
     if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
         const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
         if (entry.monitor == monitor && (!entry.workspace || entry.workspace != window->m_workspace)) {
-            if (const auto target = previewForArea(animatedWorkspaceStripRect(entry.rect, monitor)); target)
+            const Rect animatedArea = animatedWorkspaceStripRect(entry.rect, monitor);
+            std::optional<Rect> predictedPreview;
+            double transitionLimit = 0.0;
+            if (entry.snapshot && entry.snapshot->dropPreview) {
+                transitionLimit = 1.0;
+                if (entry.snapshot->previousFramebuffer && entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
+                    const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
+                    const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
+                                                 static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_PREVIEW_TRANSITION_DURATION).count()));
+                    transitionLimit = raw * raw * (3.0 - 2.0 * raw);
+                }
+
+                if (entry.snapshot->dropPreviewRect && entry.rect.width > 0.0 && entry.rect.height > 0.0) {
+                    const auto& stored = *entry.snapshot->dropPreviewRect;
+                    const double animatedScaleX = animatedArea.width / entry.rect.width;
+                    const double animatedScaleY = animatedArea.height / entry.rect.height;
+                    predictedPreview = makeRect(animatedArea.x + (stored.x - entry.rect.x) * animatedScaleX,
+                                                animatedArea.y + (stored.y - entry.rect.y) * animatedScaleY,
+                                                stored.width * animatedScaleX, stored.height * animatedScaleY);
+                }
+            }
+
+            if (const auto target = previewForArea(animatedArea, predictedPreview, transitionLimit); target)
                 return target;
         }
     }
@@ -11291,8 +11314,38 @@ void OverviewController::renderDraggedWindowPreview() const {
                     alpha = 1.0 - target->blend;
             }
         }
-        if (alpha > 0.001)
-            g_pHyprOpenGL->renderTexture(m_draggedWindowTexture, toBox(local), {.a = static_cast<float>(alpha)});
+        if (alpha > 0.001) {
+            const double renderScale = renderScaleForMonitor(renderMonitor);
+            const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(dragged.window->rounding()) * renderScale)));
+            const float roundingPower = static_cast<float>(dragged.window->roundingPower());
+            g_pHyprOpenGL->renderTexture(m_draggedWindowTexture, toBox(local),
+                                         {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
+
+            const int borderSize = std::max(0, static_cast<int>(std::lround(overviewBorderOutsetForWindow(dragged.window) * renderScale)));
+            if (borderSize > 0) {
+                auto grad = dragged.window->m_realBorderColor;
+                auto previousGrad = dragged.window->m_realBorderColorPrevious;
+                const bool animated = dragged.window->m_borderFadeAnimationProgress && dragged.window->m_borderFadeAnimationProgress->isBeingAnimated();
+                if (dragged.window->m_borderAngleAnimationProgress && dragged.window->m_borderAngleAnimationProgress->enabled()) {
+                    grad.m_angle += dragged.window->m_borderAngleAnimationProgress->value() * M_PI * 2.0;
+                    grad.m_angle = normalizeAngleRad(grad.m_angle);
+                    if (animated)
+                        previousGrad.m_angle = grad.m_angle;
+                }
+
+                Render::GL::CHyprOpenGLImpl::SBorderRenderData borderData{
+                    .round = rounding,
+                    .roundingPower = roundingPower,
+                    .borderSize = borderSize,
+                    .a = managedPreviewAlphaFor(dragged.window, static_cast<float>(alpha)),
+                    .outerRound = rounding + borderSize,
+                };
+                if (animated)
+                    g_pHyprOpenGL->renderBorder(toBox(local), previousGrad, grad, dragged.window->m_borderFadeAnimationProgress->value(), borderData);
+                else
+                    g_pHyprOpenGL->renderBorder(toBox(local), grad, borderData);
+            }
+        }
         return;
     }
 
@@ -11465,15 +11518,23 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     State previewState;
     bool  renderWorkspaceContents = false;
-    if (targetWorkspace) {
-        const std::vector<WorkspaceOverride> workspaceOverrides = {{
-            .monitorId = monitor->m_id,
-            .workspace = targetWorkspace,
-            .workspaceId = entry.workspaceId,
-            .workspaceName = entry.workspaceName,
-            .syntheticEmpty = false,
-        }};
-        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
+    if (targetWorkspace || entryIsHoveredDragTarget) {
+        if (targetWorkspace) {
+            const std::vector<WorkspaceOverride> workspaceOverrides = {{
+                .monitorId = monitor->m_id,
+                .workspace = targetWorkspace,
+                .workspaceId = entry.workspaceId,
+                .workspaceName = entry.workspaceName,
+                .syntheticEmpty = false,
+            }};
+            previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
+        } else {
+            previewState.ownerMonitor = monitor;
+            previewState.collectionPolicy = loadCollectionPolicy(ScopeOverride::OnlyCurrentWorkspace);
+            previewState.suppressWorkspaceStrip = true;
+            previewState.participatingMonitors = {monitor};
+            previewState.focusDuringOverview = Desktop::focusState()->window();
+        }
         previewState.phase = Phase::Active;
         previewState.animationProgress = 1.0;
         previewState.animationFromVisual = 1.0;
@@ -11538,7 +11599,20 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             }
         }
 
-        if (previewState.windows.empty() && !entry.windows.empty()) {
+        if (entryIsHoveredDragTarget && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
+            const auto draggedWindow = m_state.windows[*m_draggedWindowIndex].window;
+            const auto predictedIt = std::find_if(previewState.windows.begin(), previewState.windows.end(),
+                                                  [&](const ManagedWindow& managed) { return managed.window == draggedWindow; });
+            if (predictedIt != previewState.windows.end() && monitor->m_size.x > 0.0 && monitor->m_size.y > 0.0) {
+                const double scaleX = entry.rect.width / monitor->m_size.x;
+                const double scaleY = entry.rect.height / monitor->m_size.y;
+                snapshot->dropPreviewRect = makeRect(entry.rect.x + (predictedIt->targetGlobal.x - monitor->m_position.x) * scaleX,
+                                                     entry.rect.y + (predictedIt->targetGlobal.y - monitor->m_position.y) * scaleY,
+                                                     predictedIt->targetGlobal.width * scaleX, predictedIt->targetGlobal.height * scaleY);
+            }
+        }
+
+        if (targetWorkspace && previewState.windows.empty() && !entry.windows.empty()) {
             previewState.ownerMonitor = monitor;
             previewState.ownerWorkspace = targetWorkspace;
             previewState.collectionPolicy = loadCollectionPolicy(ScopeOverride::OnlyCurrentWorkspace);
@@ -11751,7 +11825,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, renderFramebuffer);
         g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.05, 0.06, 0.08, 1.0}}, fakeDamage);
         renderBackgroundLayers(renderNow);
-        if (renderWorkspaceContents && targetWorkspace && renderWindowFn) {
+        if (renderWorkspaceContents && renderWindowFn) {
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             const auto renderPreviewWindows = [&](bool floating) {
                 for (const auto& managed : m_stripPreviewContext.state.windows) {
@@ -11899,15 +11973,22 @@ void OverviewController::renderWorkspaceStrip() const {
 
         if (!entry.newWorkspaceSlot && entry.snapshot && entry.snapshot->framebuffer && entry.snapshot->framebuffer->isAllocated() && entry.snapshot->framebuffer->getTexture()) {
             double transition = 1.0;
+            bool transitionAnimating = false;
             if (entry.snapshot->previousFramebuffer && entry.snapshot->previousFramebuffer->isAllocated() && entry.snapshot->previousFramebuffer->getTexture() &&
                 entry.snapshot->transitionStart != std::chrono::steady_clock::time_point{}) {
                 const auto elapsed = std::chrono::steady_clock::now() - entry.snapshot->transitionStart;
                 const double raw = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
                                              static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_PREVIEW_TRANSITION_DURATION).count()));
                 transition = raw * raw * (3.0 - 2.0 * raw);
+                transitionAnimating = raw < 1.0;
+                if (entry.snapshot->dropPreview && hovered && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
+                    const auto draggedWindow = m_state.windows[*m_draggedWindowIndex].window;
+                    if (const auto target = draggedPreviewTargetFor(draggedWindow); target)
+                        transition = target->blend;
+                }
                 g_pHyprOpenGL->renderTexture(entry.snapshot->previousFramebuffer->getTexture(), toBox(thumbRender),
                                               {.a = static_cast<float>(std::clamp(progress * (1.0 - transition), 0.0, 1.0))});
-                if (transition < 1.0)
+                if (transitionAnimating)
                     g_pHyprRenderer->damageMonitor(renderMonitor);
             }
             g_pHyprOpenGL->renderTexture(entry.snapshot->framebuffer->getTexture(), toBox(thumbRender),
