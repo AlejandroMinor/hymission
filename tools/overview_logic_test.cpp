@@ -68,6 +68,10 @@ int main() {
     ok &= expect(chooseCyclicIndex(4, 3) == std::optional<std::size_t>{0}, "cyclic selection should wrap from the end to the start");
     ok &= expect(chooseCyclicIndex(4, 0, -1) == std::optional<std::size_t>{3}, "cyclic selection should support reverse wrapping");
 
+    ok &= expect(shouldApplyOverviewWindowTransform(true, false), "managed live windows should receive overview transforms");
+    ok &= expect(!shouldApplyOverviewWindowTransform(true, true), "closing windows should leave overview transforms before close snapshots are captured");
+    ok &= expect(!shouldApplyOverviewWindowTransform(false, false), "unmanaged windows should not receive overview transforms");
+
     const auto defaultToggle = parseToggleArguments("");
     ok &= expect(defaultToggle && defaultToggle->scope.empty() && defaultToggle->direction == ToggleDirection::Forward,
                  "toggle arguments should default to forward config scope");

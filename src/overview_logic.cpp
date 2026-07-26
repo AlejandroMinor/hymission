@@ -267,6 +267,10 @@ bool shouldSyncOverviewLiveFocus(bool handlesInput, bool overviewFocusFollowsMou
     return handlesInput && overviewFocusFollowsMouse && inputFollowMouseBeforeOpen != 0;
 }
 
+bool shouldApplyOverviewWindowTransform(bool managedByOverview, bool closePending) {
+    return managedByOverview && !closePending;
+}
+
 RecommandVisibleGestureMode resolveRecommandVisibleGestureMode(int currentScopeSign, int gestureDirectionSign) {
     if (currentScopeSign != 0 && gestureDirectionSign == -currentScopeSign)
         return RecommandVisibleGestureMode::TransferCapable;

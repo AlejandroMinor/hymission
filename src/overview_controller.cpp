@@ -2173,15 +2173,21 @@ bool OverviewController::initialize() {
             info.cancelled = true;
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
-    m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::Open); });
+    m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) {
+        clearWindowClosePending(window);
+        handleWindowSetChange(window, WindowSetChangeKind::Open);
+    });
     m_windowDestroyListener = events.window.destroy.listen([this](const PHLWINDOWREF& windowRef) {
         const auto window = windowRef.lock();
+        clearWindowClosePending(window);
         if (!window)
             return;
         pruneWindowActivationHistory(window);
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
     });
     m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) {
+        if (isVisible())
+            markWindowClosePending(window);
         pruneWindowActivationHistory(window);
         handleWindowSetChange(window, WindowSetChangeKind::General, true);
     });
@@ -3192,6 +3198,12 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     if (rawWindowRenderActive())
         return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
 
+    // Hyprland emits window.close while the window is still mapped, then asks
+    // shouldRenderWindow() while capturing its native close-animation snapshot.
+    // Never let drag/drop suppression or overview forcing affect that snapshot.
+    if (isWindowClosePending(window))
+        return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
+
     // Once the drag texture exists, the regular overview pass must stop
     // emitting the same window. The independent texture is composited by the
     // overlay after the strip, so allowing both paths produces two previews.
@@ -3205,7 +3217,7 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     if (m_dropAnimation && m_dropAnimation->texture && !m_stripPreviewContext.active && m_dropAnimation->window == window)
         return false;
 
-    if (isVisible() && window && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor) {
+    if (isVisible() && window && monitor && ownsMonitor(monitor) && shouldApplyOverviewTransform(window) && previewMonitorForWindow(window) == monitor) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
             out << "[hymission] shouldRenderWindow override " << debugWindowLabel(window) << " monitor=" << monitor->m_name;
@@ -3389,7 +3401,7 @@ void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHL
     }
 
     const auto window = g_pHyprRenderer->m_renderData.currentWindow.lock();
-    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) ||
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(window) ||
         previewMonitorForWindow(window) != monitor) {
         m_borderDrawOriginal(borderDecorationThisptr, monitor, alpha);
         return;
@@ -3404,7 +3416,7 @@ void OverviewController::shadowDrawHook(void* shadowDecorationThisptr, const PHL
     }
 
     const auto window = g_pHyprRenderer->m_renderData.currentWindow.lock();
-    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window) ||
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(window) ||
         previewMonitorForWindow(window) != monitor) {
         m_shadowDrawOriginal(shadowDecorationThisptr, monitor, alpha);
         return;
@@ -3427,7 +3439,8 @@ void OverviewController::calculateUVForSurfaceHook(const PHLWINDOW& window, SP<C
     Vector2D adjustedProjSizeUnscaled = projSizeUnscaled;
     bool     adjusted = false;
 
-    if (isVisible() && window && surface && monitor && ownsMonitor(monitor) && hasManagedWindow(window) && previewMonitorForWindow(window) == monitor && !window->m_isX11) {
+    if (isVisible() && window && surface && monitor && ownsMonitor(monitor) && shouldApplyOverviewTransform(window) && previewMonitorForWindow(window) == monitor &&
+        !window->m_isX11) {
         const auto expected = expectedSurfaceSizeForUV(window, surface, monitor, main);
         if (expected && (projSize.x + 1.0 < expected->x || projSize.y + 1.0 < expected->y)) {
             adjustedProjSize = *expected;
@@ -3757,7 +3770,7 @@ bool OverviewController::surfaceNeedsLiveBlurHook(void* surfacePassThisptr) {
 
     auto* renderData = surfaceRenderDataMutable(surfacePassThisptr);
     auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
-    if (!renderData || !renderData->pWindow || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(renderData->pWindow) ||
+    if (!renderData || !renderData->pWindow || !monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(renderData->pWindow) ||
         previewMonitorForWindow(renderData->pWindow) != monitor)
         return m_surfaceNeedsLiveBlurOriginal(surfacePassThisptr);
 
@@ -3780,7 +3793,7 @@ bool OverviewController::surfaceNeedsPrecomputeBlurHook(void* surfacePassThisptr
 
     auto* renderData = surfaceRenderDataMutable(surfacePassThisptr);
     auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
-    if (!renderData || !renderData->pWindow || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(renderData->pWindow) ||
+    if (!renderData || !renderData->pWindow || !monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(renderData->pWindow) ||
         previewMonitorForWindow(renderData->pWindow) != monitor)
         return m_surfaceNeedsPrecomputeBlurOriginal(surfacePassThisptr);
 
@@ -3857,7 +3870,7 @@ CRegion OverviewController::surfaceOpaqueRegionHook(void* surfacePassThisptr) {
     // Overview already damages the full monitor while animating, and the transformed preview
     // geometry is temporary. Returning an empty opaque region avoids pass simplification
     // incorrectly occluding lower previews and causing one-frame flashes.
-    if (isVisible() && monitor && ownsMonitor(monitor) && hasManagedWindow(renderData->pWindow)) {
+    if (isVisible() && monitor && ownsMonitor(monitor) && shouldApplyOverviewTransform(renderData->pWindow)) {
         restoreSurfaceRenderData(renderData, snapshot);
         return {};
     }
@@ -6698,6 +6711,35 @@ bool OverviewController::hasManagedWindow(const PHLWINDOW& window) const {
     return managedWindowFor(window) != nullptr;
 }
 
+bool OverviewController::isWindowClosePending(const PHLWINDOW& window) const {
+    if (!window)
+        return false;
+
+    return std::ranges::any_of(m_closePendingWindows, [&](const PHLWINDOWREF& candidate) { return candidate.lock() == window; });
+}
+
+bool OverviewController::shouldApplyOverviewTransform(const PHLWINDOW& window) const {
+    return shouldApplyOverviewWindowTransform(hasManagedWindow(window), isWindowClosePending(window));
+}
+
+void OverviewController::markWindowClosePending(const PHLWINDOW& window) {
+    if (!window)
+        return;
+
+    clearWindowClosePending(window);
+    m_closePendingWindows.emplace_back(window);
+
+    if (debugLogsEnabled())
+        debugLog("[hymission] stop overview transforms for closing window " + debugWindowLabel(window));
+}
+
+void OverviewController::clearWindowClosePending(const PHLWINDOW& window) {
+    std::erase_if(m_closePendingWindows, [&](const PHLWINDOWREF& candidate) {
+        const auto candidateWindow = candidate.lock();
+        return !candidateWindow || (window && candidateWindow == window);
+    });
+}
+
 bool OverviewController::windowHasUsableStateGeometry(const PHLWINDOW& window) const {
     if (!window)
         return false;
@@ -7348,7 +7390,7 @@ Rect OverviewController::overviewContentTargetForSlot(const PHLWINDOW& window, c
 }
 
 std::optional<OverviewController::WindowTransform> OverviewController::windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const {
-    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor))
+    if (rawWindowRenderActive() || !window || !monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(window))
         return std::nullopt;
 
     const auto* managed = managedWindowFor(window);
@@ -7792,7 +7834,7 @@ bool OverviewController::shouldSuppressSurfaceBlur(void* surfacePassThisptr) con
         return false;
 
     const auto monitor = renderData->pMonitor.lock();
-    if (!monitor || !ownsMonitor(monitor) || !hasManagedWindow(renderData->pWindow) || previewMonitorForWindow(renderData->pWindow) != monitor)
+    if (!monitor || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(renderData->pWindow) || previewMonitorForWindow(renderData->pWindow) != monitor)
         return false;
 
     if (debugSurfaceLogsEnabled()) {
@@ -7812,7 +7854,7 @@ bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, cons
         return false;
 
     monitor = renderData->pMonitor.lock();
-    if (!monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(renderData->pWindow) || previewMonitorForWindow(renderData->pWindow) != monitor)
+    if (!monitor || !isVisible() || !ownsMonitor(monitor) || !shouldApplyOverviewTransform(renderData->pWindow) || previewMonitorForWindow(renderData->pWindow) != monitor)
         return false;
 
     snapshot = {

@@ -565,6 +565,10 @@ class OverviewController {
     [[nodiscard]] bool         ownsMonitor(const PHLMONITOR& monitor) const;
     [[nodiscard]] bool         ownsWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasManagedWindow(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         isWindowClosePending(const PHLWINDOW& window) const;
+    [[nodiscard]] bool         shouldApplyOverviewTransform(const PHLWINDOW& window) const;
+    void                       markWindowClosePending(const PHLWINDOW& window);
+    void                       clearWindowClosePending(const PHLWINDOW& window = {});
     [[nodiscard]] bool         windowHasUsableStateGeometry(const PHLWINDOW& window) const;
     [[nodiscard]] bool         windowMatchesOverviewScope(const PHLWINDOW& window, const State& state, bool requireUsableGeometry) const;
     [[nodiscard]] bool         shouldAutoCloseFor(const PHLWINDOW& window) const;
@@ -857,6 +861,7 @@ class OverviewController {
     std::size_t               m_pendingWindowGeometryRetryGeneration = 0;
     PHLWORKSPACEREF           m_pendingStripWorkspaceChangeTarget;
     PHLWINDOWREF              m_postCloseForcedFocus;
+    std::vector<PHLWINDOWREF> m_closePendingWindows;
     bool                      m_postCloseForcedFocusLatched = false;
     std::size_t               m_ignorePostCloseMouseMoveCount = 0;
     PostCloseDispatcher       m_postCloseDispatcher = PostCloseDispatcher::None;
