@@ -469,7 +469,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.4.3",
+        .version = "0.5.0",
     };
 }
 
