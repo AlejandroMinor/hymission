@@ -74,8 +74,6 @@
 namespace hymission {
 
 using Render::GL::g_pHyprOpenGL;
-using Render::RENDER_MODE_FULL_FAKE;
-
 class OverviewOverlayPassElement final : public IPassElement {
   public:
     OverviewOverlayPassElement(OverviewController* controller, const PHLMONITOR& monitor) : m_controller(controller), m_monitor(monitor) {
@@ -90,6 +88,7 @@ class OverviewOverlayPassElement final : public IPassElement {
         if (!expectedMonitor || renderMonitor != expectedMonitor)
             return {};
 
+        m_controller->refreshDraggedWindowCompositeTexture();
         m_controller->renderHiddenStripLayerProxies();
         m_controller->renderSelectionChrome();
         m_controller->renderPickLabels();
@@ -2707,7 +2706,7 @@ std::string OverviewController::handleRawWindowRenderCommand(const std::string& 
 }
 
 bool OverviewController::rawWindowRenderActive() const {
-    return m_dragSnapshotRenderDepth > 0 || m_externalRawWindowRenderDepth > 0;
+    return m_externalRawWindowRenderDepth > 0;
 }
 
 std::string OverviewController::handleCaptureInputCommand(const std::string& args) {
@@ -3378,10 +3377,11 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
     if (isWindowClosePending(window))
         return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
 
-    // Once the drag texture exists, the regular overview pass must stop
-    // emitting the same window. The independent texture is composited by the
-    // overlay after the strip, so allowing both paths produces two previews.
-    if (m_draggedWindowTexture && !m_stripPreviewContext.active && m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size() &&
+    // Single-surface windows use an independent texture and must be omitted
+    // from the regular pass. Multi-surface windows stay visible long enough to
+    // capture their fully composited pixels before the strip covers them.
+    if (!m_draggedWindowCompositeCapture && m_draggedWindowTexture && !m_stripPreviewContext.active && m_draggedWindowIndex &&
+        *m_draggedWindowIndex < m_state.windows.size() &&
         m_state.windows[*m_draggedWindowIndex].window == window)
         return false;
 
@@ -11476,6 +11476,7 @@ void OverviewController::clearStripWindowDragState() {
     m_dragSettlement.reset();
     m_draggedWindowFramebuffer.reset();
     m_draggedWindowTexture.reset();
+    m_draggedWindowCompositeCapture = false;
     m_dragDimStripIndex.reset();
     m_dragDimStart = {};
     m_pressedWindowPointer = {};
@@ -11902,21 +11903,18 @@ void OverviewController::renderDraggedWindowPreview() const {
     Rect                 preview;
     double               alpha = 1.0;
     double               decorationScale = 1.0;
-    bool                 compositeSnapshot = false;
 
     if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
         const auto& dragged = m_state.windows[*m_draggedWindowIndex];
         window = dragged.window;
         monitor = dragged.targetMonitor;
         texture = m_draggedWindowTexture;
-        compositeSnapshot = static_cast<bool>(m_draggedWindowFramebuffer);
         preview = draggedPreviewRectFor(window).value_or(Rect{});
         decorationScale = draggedPreviewScale();
     } else if (m_dropAnimation && m_dropAnimation->window && m_dropAnimation->monitor && m_dropAnimation->texture) {
         window = m_dropAnimation->window;
         monitor = m_dropAnimation->monitor;
         texture = m_dropAnimation->texture;
-        compositeSnapshot = static_cast<bool>(m_dropAnimation->framebuffer);
 
         const double raw = dropAnimationProgress();
         const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
@@ -11947,16 +11945,6 @@ void OverviewController::renderDraggedWindowPreview() const {
     const double renderScale = renderScaleForMonitor(renderMonitor);
     const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * decorationScale * renderScale)));
     const float roundingPower = static_cast<float>(window->roundingPower());
-    static auto PBLURENABLED = CConfigValue<Config::INTEGER>("decoration:blur:enabled");
-    const auto  windowSurface = window->wlSurface();
-    const bool  backgroundEffectAllowsBlur = !windowSurface || !windowSurface->m_hasBackgroundEffect || !windowSurface->m_blurRegion.empty();
-    const bool  shouldBlurComposite =
-        compositeSnapshot && *PBLURENABLED && !window->m_ruleApplicator->noBlur().valueOrDefault() &&
-        !window->m_ruleApplicator->RGBX().valueOrDefault() && !window->opaque() && backgroundEffectAllowsBlur;
-    if (shouldBlurComposite) {
-        g_pHyprOpenGL->renderRect(toBox(local), CHyprColor{0.0, 0.0, 0.0, 0.0},
-                                  {.round = rounding, .roundingPower = roundingPower, .blur = true, .blurA = static_cast<float>(alpha)});
-    }
     g_pHyprOpenGL->renderTexture(texture, toBox(local), {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
 
     renderOverviewBorderForRect(window, renderMonitor, preview, static_cast<float>(alpha), decorationScale, true);
@@ -11965,6 +11953,7 @@ void OverviewController::renderDraggedWindowPreview() const {
 void OverviewController::captureDraggedWindowTexture() {
     m_draggedWindowFramebuffer.reset();
     m_draggedWindowTexture.reset();
+    m_draggedWindowCompositeCapture = false;
     if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !g_pHyprRenderer || !g_pHyprOpenGL)
         return;
 
@@ -11991,88 +11980,51 @@ void OverviewController::captureDraggedWindowTexture() {
         return;
     }
 
-    const Rect actual = surfaceRenderGlobalRectForWindow(dragged.window);
-    if (actual.width <= 1.0 || actual.height <= 1.0)
+    // Firefox/Zen can place visible browser content in child surfaces, and its
+    // transparent chrome needs the already-composited desktop behind it. Keep
+    // the real transformed window in the main pass, then copy its final pixels
+    // immediately before the workspace strip is drawn.
+    m_draggedWindowCompositeCapture = true;
+    damageOwnedMonitors();
+}
+
+void OverviewController::refreshDraggedWindowCompositeTexture() {
+    if (!m_draggedWindowCompositeCapture || !m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !g_pHyprRenderer ||
+        !g_pHyprOpenGL)
         return;
 
-    // A window's top-level wl_surface is not necessarily its visible content.
-    // Firefox/Zen, for example, can place the browser image in child surfaces.
-    // Render the complete tree in standalone mode so window alpha and blur are
-    // not baked into the texture. Blur is restored behind the texture at its
-    // dragged position, avoiding black bands in transparent browser chrome.
-    using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
-    static RenderWindowFn renderWindowFn = nullptr;
-    static bool           renderWindowResolved = false;
-    if (!renderWindowResolved) {
-        renderWindowResolved = true;
-        renderWindowFn = reinterpret_cast<RenderWindowFn>(findFunction("renderWindow", "IHyprRenderer::renderWindow"));
-        if (!renderWindowFn)
-            debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for dragged window snapshot");
+    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+    const auto  renderMonitor = g_pHyprRenderer->m_renderData.pMonitor.lock();
+    const auto  sourceFramebuffer = g_pHyprRenderer->m_renderData.currentFB;
+    if (!dragged.window || !dragged.targetMonitor || !renderMonitor || renderMonitor != dragged.targetMonitor || !sourceFramebuffer ||
+        !sourceFramebuffer->isAllocated())
+        return;
+
+    const Rect preview = draggedPreviewRectFor(dragged.window).value_or(Rect{});
+    const Rect sourceRect = rectToMonitorRenderLocal(preview, renderMonitor);
+    if (sourceRect.width <= 1.0 || sourceRect.height <= 1.0)
+        return;
+
+    const int fbWidth = std::max(1, static_cast<int>(std::ceil(sourceRect.width)));
+    const int fbHeight = std::max(1, static_cast<int>(std::ceil(sourceRect.height)));
+    if (!m_draggedWindowFramebuffer || !m_draggedWindowFramebuffer->isAllocated() ||
+        std::abs(m_draggedWindowFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(m_draggedWindowFramebuffer->m_size.y - fbHeight) > 0.5) {
+        auto framebuffer = createFramebuffer("hymission composited dragged window");
+        if (!framebuffer || !framebuffer->alloc(fbWidth, fbHeight)) {
+            debugLog("[hymission] unable to allocate composited dragged window capture");
+            return;
+        }
+
+        framebuffer->setImageDescription(renderMonitor->workBufferImageDescription());
+        setFramebufferLinearFiltering(*framebuffer);
+        m_draggedWindowFramebuffer = std::move(framebuffer);
     }
-    if (!renderWindowFn)
-        return;
 
-    auto fullSnapshot = createFramebuffer("hymission complete dragged window snapshot");
-    if (!fullSnapshot ||
-        !fullSnapshot->alloc(std::max(1, static_cast<int>(std::lround(dragged.targetMonitor->m_pixelSize.x))),
-                             std::max(1, static_cast<int>(std::lround(dragged.targetMonitor->m_pixelSize.y))))) {
-        debugLog("[hymission] unable to allocate complete dragged window snapshot");
-        return;
-    }
-    fullSnapshot->setImageDescription(dragged.targetMonitor->workBufferImageDescription());
-    setFramebufferLinearFiltering(*fullSnapshot);
-
-    g_pHyprOpenGL->makeEGLCurrent();
-    const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockScreenShader = g_pHyprRenderer->m_renderData.blockScreenShader;
-    const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-    ++m_dragSnapshotRenderDepth;
-
-    CRegion fakeDamage{0, 0, static_cast<int>(std::lround(dragged.targetMonitor->m_transformedSize.x)),
-                       static_cast<int>(std::lround(dragged.targetMonitor->m_transformedSize.y))};
-    if (!g_pHyprRenderer->beginFullFakeRender(dragged.targetMonitor, fakeDamage, fullSnapshot)) {
-        --m_dragSnapshotRenderDepth;
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
-        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
-        g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
-        debugLog("[hymission] unable to begin complete dragged window snapshot");
+    if (!blitFramebufferRegion(*sourceFramebuffer, *m_draggedWindowFramebuffer, sourceRect, makeRect(0.0, 0.0, fbWidth, fbHeight))) {
+        debugLog("[hymission] unable to capture composited dragged window pixels");
         return;
     }
 
-    g_pHyprRenderer->m_bRenderingSnapshot = true;
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.0, 0.0, 0.0, 0.0}}, fakeDamage);
-    g_pHyprRenderer->startRenderPass();
-    renderWindowFn(g_pHyprRenderer.get(), dragged.window, dragged.targetMonitor, Time::steadyNow(), false, Render::RENDER_PASS_ALL, false, true);
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
-    g_pHyprRenderer->endRender();
-
-    --m_dragSnapshotRenderDepth;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
-    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
-    g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
-    if (!fullSnapshot || !fullSnapshot->isAllocated() || !fullSnapshot->getTexture()) {
-        debugLog("[hymission] unable to capture complete dragged window snapshot");
-        return;
-    }
-
-    const Rect sourceRect = rectToMonitorRenderLocal(actual, dragged.targetMonitor);
-    const int  fbWidth = std::max(1, static_cast<int>(std::ceil(sourceRect.width)));
-    const int  fbHeight = std::max(1, static_cast<int>(std::ceil(sourceRect.height)));
-    auto       croppedSnapshot = createFramebuffer("hymission dragged window snapshot");
-    if (!croppedSnapshot || !croppedSnapshot->alloc(fbWidth, fbHeight)) {
-        debugLog("[hymission] unable to allocate dragged window snapshot");
-        return;
-    }
-
-    croppedSnapshot->setImageDescription(dragged.targetMonitor->workBufferImageDescription());
-    setFramebufferLinearFiltering(*croppedSnapshot);
-    if (!blitFramebufferRegion(*fullSnapshot, *croppedSnapshot, sourceRect, makeRect(0.0, 0.0, fbWidth, fbHeight))) {
-        debugLog("[hymission] unable to crop complete dragged window snapshot");
-        return;
-    }
-
-    m_draggedWindowFramebuffer = std::move(croppedSnapshot);
     m_draggedWindowTexture = m_draggedWindowFramebuffer->getTexture();
     setTextureLinearFiltering(m_draggedWindowTexture);
 }

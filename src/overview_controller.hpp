@@ -783,6 +783,7 @@ class OverviewController {
     void renderSelectionChrome() const;
     void renderDraggedWindowPreview() const;
     void captureDraggedWindowTexture();
+    void refreshDraggedWindowCompositeTexture();
     void renderPickLabels() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
@@ -913,7 +914,6 @@ class OverviewController {
     bool                     m_toggleSwitchSessionActive = false;
     bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
-    std::size_t              m_dragSnapshotRenderDepth = 0;
     std::size_t              m_externalRawWindowRenderDepth = 0;
     std::string              m_externalRawWindowRenderToken;
     std::string              m_externalCaptureInputToken;
@@ -930,6 +930,7 @@ class OverviewController {
     std::optional<DropAnimation>  m_dropAnimation;
     SP<Render::IFramebuffer>      m_draggedWindowFramebuffer;
     SP<Render::ITexture>          m_draggedWindowTexture;
+    bool                          m_draggedWindowCompositeCapture = false;
     std::optional<std::size_t>    m_dragDimStripIndex;
     std::chrono::steady_clock::time_point m_dragDimStart = {};
     std::optional<int>         m_pendingPickLetterGroup; // 0=A, 1=B, ... 25=Z
