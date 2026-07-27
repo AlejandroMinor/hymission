@@ -478,6 +478,8 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
+    [[nodiscard]] bool         pickLabelsEnabled() const;
+    [[nodiscard]] bool         pickLabelsDirectActivateEnabled() const;
     [[nodiscard]] double       focusHoverThickness() const;
     [[nodiscard]] double       focusSelectedThickness() const;
     [[nodiscard]] double       dragOutlineThickness() const;
@@ -575,6 +577,7 @@ class OverviewController {
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const State& state) const;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
+    [[nodiscard]] std::vector<std::size_t> pickOrderForCurrentState() const;
     [[nodiscard]] Rect         workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] Rect         overviewContentRectForMonitor(const PHLMONITOR& monitor, const State& state) const;
     [[nodiscard]] Vector2D     stripThumbnailPreviewOffset(const PHLMONITOR& monitor, const State& state) const;
@@ -720,6 +723,11 @@ class OverviewController {
     void moveSelection(Direction direction);
     [[nodiscard]] bool moveSelectionCircular(int step = 1, const char* source = "?");
     void activateSelection();
+    [[nodiscard]] bool pickLabelsInteractionAllowed() const;
+    [[nodiscard]] bool handlePickLabelKey(xkb_keysym_t keysym);
+    void               resolvePickSelection(std::size_t orderIndex);
+    void               armPickLabelPrefixTimeout();
+    void               clearPickLabelPrefixState();
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
     void debugLog(const std::string& message) const;
     void debugSurfaceLog(const std::string& message) const;
@@ -759,6 +767,7 @@ class OverviewController {
     void renderSelectionChrome() const;
     void renderDraggedWindowPreview() const;
     void captureDraggedWindowTexture();
+    void renderPickLabels() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
     void activateStripTarget(std::size_t index);
     void clearStripWindowDragState();
@@ -837,6 +846,7 @@ class OverviewController {
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
     SP<CEventLoopTimer>       m_toggleSwitchReleasePollTimer;
+    SP<CEventLoopTimer>       m_pickLetterPrefixTimer;
     std::unordered_map<PHLWINDOW, std::uint64_t> m_windowMruSerials;
     std::uint64_t            m_nextWindowMruSerial = 1;
     bool                      m_deactivatePending = false;
@@ -904,6 +914,7 @@ class OverviewController {
     SP<Render::ITexture>          m_draggedWindowTexture;
     std::optional<std::size_t>    m_dragDimStripIndex;
     std::chrono::steady_clock::time_point m_dragDimStart = {};
+    std::optional<int>         m_pendingPickLetterGroup; // 0=A, 1=B, ... 25=Z
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};

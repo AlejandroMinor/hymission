@@ -72,6 +72,49 @@ int main() {
     ok &= expect(!shouldApplyOverviewWindowTransform(true, true), "closing windows should leave overview transforms before close snapshots are captured");
     ok &= expect(!shouldApplyOverviewWindowTransform(false, false), "unmanaged windows should not receive overview transforms");
 
+    ok &= expect(computePickOrder(rects, {0, 0, 0, 0}) == std::vector<std::size_t>({0, 1, 2, 3}),
+                 "pick order should read a single grid in row-major order");
+    {
+        const std::vector<Rect>        twoMonitorRects = {
+            {500, 0, 100, 100}, // monitor 1, row 0
+            {0, 0, 100, 100},   // monitor 0, row 0
+            {0, 140, 100, 100}, // monitor 0, row 1
+        };
+        const std::vector<std::size_t> ranks = {1, 0, 0};
+        ok &= expect(computePickOrder(twoMonitorRects, ranks) == std::vector<std::size_t>({1, 2, 0}),
+                     "pick order should exhaust the lower-ranked monitor before moving to the next");
+    }
+    {
+        const std::vector<Rect>        staggeredRow = {
+            {0, 0, 100, 100},
+            {140, 40, 100, 100}, // within half-height tolerance of row 0 -> same row
+            {0, 260, 100, 100},  // clearly a new row
+        };
+        const std::vector<std::size_t> ranks = {0, 0, 0};
+        ok &= expect(computePickOrder(staggeredRow, ranks) == std::vector<std::size_t>({0, 1, 2}),
+                     "pick order should cluster near-aligned previews into the same row before sorting by x");
+    }
+    ok &= expect(computePickOrder({}, {}).empty(), "pick order should be empty for no windows");
+
+    ok &= expect(computePickLabel(0) == "1", "pick label 0 should be \"1\"");
+    ok &= expect(computePickLabel(8) == "9", "pick label 8 should be \"9\"");
+    ok &= expect(computePickLabel(9) == "A1", "pick label 9 should roll over to \"A1\"");
+    ok &= expect(computePickLabel(17) == "A9", "pick label 17 should be \"A9\"");
+    ok &= expect(computePickLabel(18) == "B1", "pick label 18 should roll over to \"B1\"");
+    ok &= expect(computePickLabel(9 + 26 * 9 - 1) == "Z9", "pick label at the last addressable slot should be \"Z9\"");
+    ok &= expect(computePickLabel(9 + 26 * 9).empty(), "pick label beyond the addressable range should be empty");
+
+    ok &= expect(computePickOrderIndex(1, std::nullopt) == 0, "digit-only pick order index 1 should map to 0");
+    ok &= expect(computePickOrderIndex(9, std::nullopt) == 8, "digit-only pick order index 9 should map to 8");
+    ok &= expect(computePickOrderIndex(1, 0) == 9, "letter group A digit 1 should map to order index 9");
+    ok &= expect(computePickOrderIndex(9, 0) == 17, "letter group A digit 9 should map to order index 17");
+    ok &= expect(computePickOrderIndex(1, 1) == 18, "letter group B digit 1 should map to order index 18");
+    ok &= expect(!pickLetterGroupAvailable(9, 0), "letter group A should not be armed before an A label exists");
+    ok &= expect(pickLetterGroupAvailable(10, 0), "letter group A should be armed when A1 exists");
+    ok &= expect(!pickLetterGroupAvailable(18, 1), "letter group B should not be armed before B1 exists");
+    ok &= expect(pickLetterGroupAvailable(19, 1), "letter group B should be armed when B1 exists");
+    ok &= expect(!pickLetterGroupAvailable(243, 26), "letter groups outside A-Z should be rejected");
+
     const auto defaultToggle = parseToggleArguments("");
     ok &= expect(defaultToggle && defaultToggle->scope.empty() && defaultToggle->direction == ToggleDirection::Forward,
                  "toggle arguments should default to forward config scope");

@@ -146,6 +146,74 @@ std::optional<std::size_t> chooseCyclicIndex(std::size_t count, std::size_t curr
     return static_cast<std::size_t>((static_cast<long long>(currentIndex) + normalized) % countSigned);
 }
 
+std::vector<std::size_t> computePickOrder(const std::vector<Rect>& rects, const std::vector<std::size_t>& monitorRanks) {
+    const std::size_t n = rects.size();
+    if (n == 0 || monitorRanks.size() != n)
+        return {};
+
+    std::size_t maxRank = 0;
+    for (const std::size_t rank : monitorRanks)
+        maxRank = std::max(maxRank, rank);
+
+    std::vector<std::vector<std::size_t>> byMonitor(maxRank + 1);
+    for (std::size_t i = 0; i < n; ++i)
+        byMonitor[monitorRanks[i]].push_back(i);
+
+    std::vector<std::size_t> order;
+    order.reserve(n);
+
+    for (auto& bucket : byMonitor) {
+        std::sort(bucket.begin(), bucket.end(), [&](std::size_t a, std::size_t b) { return rects[a].y < rects[b].y; });
+
+        std::vector<std::vector<std::size_t>> rows;
+        for (const std::size_t idx : bucket) {
+            if (!rows.empty()) {
+                const std::size_t rowRef = rows.back().front();
+                if (std::abs(rects[idx].y - rects[rowRef].y) <= rects[rowRef].height * 0.5) {
+                    rows.back().push_back(idx);
+                    continue;
+                }
+            }
+            rows.push_back({idx});
+        }
+
+        for (auto& row : rows) {
+            std::sort(row.begin(), row.end(), [&](std::size_t a, std::size_t b) { return rects[a].x < rects[b].x; });
+            order.insert(order.end(), row.begin(), row.end());
+        }
+    }
+
+    return order;
+}
+
+std::string computePickLabel(std::size_t orderIndex) {
+    if (orderIndex < 9)
+        return std::to_string(orderIndex + 1);
+
+    const std::size_t rem = orderIndex - 9;
+    const std::size_t groupIndex = rem / 9;
+    const std::size_t withinGroup = rem % 9;
+    if (groupIndex >= 26)
+        return {};
+
+    return std::string(1, static_cast<char>('A' + groupIndex)) + std::to_string(withinGroup + 1);
+}
+
+std::size_t computePickOrderIndex(int digit1to9, std::optional<int> letterGroupAtoZ) {
+    const auto within = static_cast<std::size_t>(digit1to9 - 1);
+    if (!letterGroupAtoZ)
+        return within;
+
+    return 9 + static_cast<std::size_t>(*letterGroupAtoZ) * 9 + within;
+}
+
+bool pickLetterGroupAvailable(std::size_t windowCount, int letterGroupAtoZ) {
+    if (letterGroupAtoZ < 0 || letterGroupAtoZ >= 26)
+        return false;
+
+    return computePickOrderIndex(1, letterGroupAtoZ) < windowCount;
+}
+
 std::optional<ToggleArguments> parseToggleArguments(std::string_view value) {
     ToggleArguments result;
     value = trimAsciiWhitespace(value);

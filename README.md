@@ -308,6 +308,8 @@ hl.config({
             hide_bar_animation_alpha_end = 0,
             bar_single_mission_control = 0,
             show_focus_indicator = 0,
+            pick_labels_enabled = 0,
+            pick_labels_direct_activate = 0,
             backdrop_blur = 0,
             backdrop_color = "rgba(00000000)",
             focus_hover_color = "rgba(f2f7ff8c)",
@@ -371,12 +373,15 @@ hl.config({
 | `workspace_change_keeps_overview` | bool | `1` | Keep overview open when switching workspaces in active-workspace scope. |
 | `hide_hyprbars_during_overview` | bool | `0` | Suppress drawing of official `hyprbars` title bars while overview renders, without changing their reserved decoration space. This is a no-op unless `hyprbars` is loaded. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
+| `pick_labels_enabled` | bool | `0` | Show a pick label (`1`-`9`, then `A1`-`A9`, `B1`-`B9`, ...) on each preview's top-right corner and let matching keys select that preview directly, in addition to arrow-key/mouse navigation. Reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; no dedicated color/size options. Previews smaller than 4x the label font size skip drawing the label to avoid spilling onto a neighboring preview; its assigned key still selects that window, along with mouse/arrow-key navigation. |
+| `pick_labels_direct_activate` | bool | `0` | Only applies when `pick_labels_enabled = 1`. `0` only moves the selection (still requires `Return` to confirm, same as arrow keys); `1` activates and closes overview immediately when a pick label is hit. |
 
 Behavior notes:
 
 - In multi-workspace overview, hover-driven real focus may still cross workspaces, but the overview grid stays anchored instead of rebuilding on every workspace change.
 - In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
 - Toggle switch mode keeps current hover semantics: if `overview_focus_follows_mouse = 1`, moving the pointer can still retarget the final committed selection during the switch session.
+- With `pick_labels_enabled = 1`, past the 9th window a letter key (`A`-`Z`) arms a ~1.5s prefix waiting for its digit (e.g. `A` then `2` picks `A2`); any other key cancels the prefix without losing its own normal effect (e.g. `Esc` still closes overview).
 
 ### Appearance options
 
