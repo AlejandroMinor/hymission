@@ -11944,6 +11944,25 @@ void OverviewController::captureDraggedWindowTexture() {
     if (!dragged.window || !dragged.targetMonitor || m_stripSnapshotRenderDepth > 0)
         return;
 
+    const auto surface = dragged.window->resource();
+    if (!surface)
+        return;
+
+    // Preserve the original zero-copy path for ordinary single-surface
+    // windows. It retains the client's texture at native resolution and has
+    // none of the renderer-state or cropping risks of an offscreen snapshot.
+    // Only multi-surface clients need the composite fallback below.
+    if (!surface->hasVisibleSubsurface()) {
+        if (!surface->m_current.texture) {
+            debugLog("[hymission] unable to retain dragged window surface texture");
+            return;
+        }
+
+        m_draggedWindowTexture = surface->m_current.texture;
+        setTextureLinearFiltering(m_draggedWindowTexture);
+        return;
+    }
+
     const Rect actual = surfaceRenderGlobalRectForWindow(dragged.window);
     if (actual.width <= 1.0 || actual.height <= 1.0)
         return;
