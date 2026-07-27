@@ -235,6 +235,7 @@ class OverviewController {
     struct DropAnimation {
         PHLWINDOW                             window;
         PHLMONITOR                            monitor;
+        SP<Render::IFramebuffer>              framebuffer;
         SP<Render::ITexture>                  texture;
         WORKSPACEID                           workspaceId = WORKSPACE_INVALID;
         Rect                                  from;
@@ -927,6 +928,7 @@ class OverviewController {
     std::optional<std::size_t>   m_draggedWindowIndex;
     std::optional<DragSettlement> m_dragSettlement;
     std::optional<DropAnimation>  m_dropAnimation;
+    SP<Render::IFramebuffer>      m_draggedWindowFramebuffer;
     SP<Render::ITexture>          m_draggedWindowTexture;
     std::optional<std::size_t>    m_dragDimStripIndex;
     std::chrono::steady_clock::time_point m_dragDimStart = {};

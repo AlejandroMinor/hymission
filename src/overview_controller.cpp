@@ -2965,6 +2965,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const Rect  dragReturnTarget = currentPreviewRect(m_state.windows[draggedIndex]);
             const double dropDecorationScale = draggedPreviewScale();
             const auto  stripDropTarget = window && hoveredStripIndex ? draggedPreviewTargetFor(window) : std::optional<DragPreviewTarget>{};
+            const auto  dropFramebuffer = m_draggedWindowFramebuffer;
             const auto  dropTexture = m_draggedWindowTexture;
             const auto  dropMonitor = m_state.windows[draggedIndex].targetMonitor;
             double      dropInitialDim = 1.0;
@@ -2998,6 +2999,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                     m_dropAnimation = DropAnimation{
                         .window = window,
                         .monitor = dropMonitor,
+                        .framebuffer = dropFramebuffer,
                         .texture = dropTexture,
                         .workspaceId = targetWorkspace->m_id,
                         .from = *draggedPreview,
@@ -3017,6 +3019,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 m_dropAnimation = DropAnimation{
                     .window = window,
                     .monitor = dropMonitor,
+                    .framebuffer = dropFramebuffer,
                     .texture = dropTexture,
                     .workspaceId = window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID,
                     .from = *draggedPreview,
@@ -11475,6 +11478,7 @@ void OverviewController::clearStripWindowDragState() {
     m_pressedWindowIndex.reset();
     m_draggedWindowIndex.reset();
     m_dragSettlement.reset();
+    m_draggedWindowFramebuffer.reset();
     m_draggedWindowTexture.reset();
     m_dragDimStripIndex.reset();
     m_dragDimStart = {};
@@ -11950,24 +11954,53 @@ void OverviewController::renderDraggedWindowPreview() const {
 }
 
 void OverviewController::captureDraggedWindowTexture() {
+    m_draggedWindowFramebuffer.reset();
     m_draggedWindowTexture.reset();
     if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size() || !g_pHyprRenderer || !g_pHyprOpenGL)
         return;
 
     const auto& dragged = m_state.windows[*m_draggedWindowIndex];
-    if (!dragged.window || m_stripSnapshotRenderDepth > 0)
+    if (!dragged.window || !dragged.targetMonitor || m_stripSnapshotRenderDepth > 0)
         return;
 
-    const auto surface = dragged.window->resource();
-    if (!surface || !surface->m_current.texture) {
-        debugLog("[hymission] unable to retain dragged window surface texture");
+    const Rect preview = draggedPreviewRectFor(dragged.window).value_or(Rect{});
+    if (preview.width <= 1.0 || preview.height <= 1.0)
+        return;
+
+    // A window's top-level wl_surface is not necessarily its visible content.
+    // Firefox/Zen, for example, can place the browser image in child surfaces.
+    // Ask Hyprland to render the complete surface tree, then crop the monitor-
+    // sized snapshot down to the window preview that was visible at grab time.
+    // Keeping the framebuffer alive also keeps its texture valid throughout
+    // the drag and the optional drop/return animation.
+    g_pHyprOpenGL->makeEGLCurrent();
+    const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
+    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    const auto fullSnapshot = g_pHyprRenderer->makeSnapshotFB(dragged.window);
+    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
+    if (!fullSnapshot || !fullSnapshot->isAllocated() || !fullSnapshot->getTexture()) {
+        debugLog("[hymission] unable to capture complete dragged window snapshot");
         return;
     }
 
-    // Retain the already-rendered surface content instead of entering a nested
-    // window render from the pointer callback. Holding this shared texture
-    // freezes a stable drag image even if the client submits a newer buffer.
-    m_draggedWindowTexture = surface->m_current.texture;
+    const Rect sourceRect = rectToMonitorRenderLocal(preview, dragged.targetMonitor);
+    const int  fbWidth = std::max(1, static_cast<int>(std::ceil(sourceRect.width)));
+    const int  fbHeight = std::max(1, static_cast<int>(std::ceil(sourceRect.height)));
+    auto       croppedSnapshot = createFramebuffer("hymission dragged window snapshot");
+    if (!croppedSnapshot || !croppedSnapshot->alloc(fbWidth, fbHeight)) {
+        debugLog("[hymission] unable to allocate dragged window snapshot");
+        return;
+    }
+
+    croppedSnapshot->setImageDescription(dragged.targetMonitor->workBufferImageDescription());
+    setFramebufferLinearFiltering(*croppedSnapshot);
+    if (!blitFramebufferRegion(*fullSnapshot, *croppedSnapshot, sourceRect, makeRect(0.0, 0.0, fbWidth, fbHeight))) {
+        debugLog("[hymission] unable to crop complete dragged window snapshot");
+        return;
+    }
+
+    m_draggedWindowFramebuffer = std::move(croppedSnapshot);
+    m_draggedWindowTexture = m_draggedWindowFramebuffer->getTexture();
     setTextureLinearFiltering(m_draggedWindowTexture);
 }
 
