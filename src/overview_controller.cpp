@@ -1491,13 +1491,6 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
-Rect workspaceThumbnailGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
-    Rect rect = stateSnapshotGlobalRectForWindow(window, goal);
-    if (window && window->m_isFloating)
-        rect = translateRect(rect, window->m_floatingOffset.x, window->m_floatingOffset.y);
-    return rect;
-}
-
 Rect layoutAnchorGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     if (!window)
         return {};
@@ -7246,18 +7239,6 @@ Rect OverviewController::overviewContentRectForMonitor(const PHLMONITOR& monitor
     return makeRect(reservation.content.x, reservation.content.y, reservation.content.width, reservation.content.height);
 }
 
-Vector2D OverviewController::stripThumbnailPreviewOffset(const PHLMONITOR& monitor, const State& state) const {
-    if (!monitor || !workspaceStripEnabled(state))
-        return {};
-
-    const Rect previewArea = overviewContentRectForMonitor(monitor, state);
-    const Rect fullArea = makeRect(0.0, 0.0, monitor->m_size.x, monitor->m_size.y);
-    return Vector2D{
-        (previewArea.x + previewArea.width * 0.5) - (fullArea.x + fullArea.width * 0.5),
-        (previewArea.y + previewArea.height * 0.5) - (fullArea.y + fullArea.height * 0.5),
-    };
-}
-
 std::vector<Rect> OverviewController::stripRects() const {
     std::vector<Rect> rects;
     rects.reserve(m_state.stripEntries.size());
@@ -12233,29 +12214,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             }};
             previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
 
-            // A strip card is a miniature of the workspace, not another
-            // Mission Control layout. buildState() is still useful here for
-            // collecting the correct windows and fullscreen metadata, but its
-            // computed slots belong to the main overview. Restore every
-            // window to its real workspace geometry before rendering the
-            // offscreen snapshot. Workspace render offsets are deliberately
-            // excluded because the target workspace is temporarily made
-            // visible at a zero offset below.
-            for (auto& managed : previewState.windows) {
-                const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(managed.window);
-                const Rect workspaceGlobal = workspaceThumbnailGlobalRectForWindow(managed.window, useGoalGeometry);
-                const Rect monitorLocal = rectToMonitorLocal(workspaceGlobal, monitor);
-                managed.naturalGlobal = workspaceGlobal;
-                managed.exitGlobal = workspaceGlobal;
-                managed.relayoutFromGlobal = workspaceGlobal;
-                managed.targetGlobal = workspaceGlobal;
-                managed.slot = {
-                    .index = managed.slot.index,
-                    .natural = monitorLocal,
-                    .target = monitorLocal,
-                    .scale = 1.0,
-                };
-            }
         } else {
             previewState.ownerMonitor = monitor;
             previewState.collectionPolicy = loadCollectionPolicy(ScopeOverride::OnlyCurrentWorkspace);
@@ -12313,17 +12271,6 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                 managed.targetGlobal = overviewContentTargetForSlot(managed.window, monitor, managed.slot);
                 managed.relayoutFromGlobal = managed.targetGlobal;
                 managed.exitGlobal = managed.targetGlobal;
-            }
-        }
-
-        const Vector2D previewOffset = stripThumbnailPreviewOffset(monitor, previewState);
-        if (previewOffset.x != 0.0 || previewOffset.y != 0.0) {
-            for (auto& managed : previewState.windows) {
-                managed.targetGlobal = translateRect(managed.targetGlobal, -previewOffset.x, -previewOffset.y);
-                managed.relayoutFromGlobal = translateRect(managed.relayoutFromGlobal, -previewOffset.x, -previewOffset.y);
-                managed.exitGlobal = translateRect(managed.exitGlobal, -previewOffset.x, -previewOffset.y);
-                managed.slot.target =
-                    makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
             }
         }
 
