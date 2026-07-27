@@ -512,6 +512,48 @@ xkb_keysym_t keysymFromConfiguredSwitchReleaseKey(const std::string& value) {
     return xkb_keysym_from_name(value.c_str(), XKB_KEYSYM_CASE_INSENSITIVE);
 }
 
+std::optional<char> spatialPickLabelForPhysicalKeycode(uint32_t keycode) {
+    switch (keycode) {
+        case KEY_1: return '1';
+        case KEY_2: return '2';
+        case KEY_3: return '3';
+        case KEY_4: return '4';
+        case KEY_5: return '5';
+        case KEY_6: return '6';
+        case KEY_7: return '7';
+        case KEY_8: return '8';
+        case KEY_9: return '9';
+        case KEY_0: return '0';
+        case KEY_Q: return 'Q';
+        case KEY_W: return 'W';
+        case KEY_E: return 'E';
+        case KEY_R: return 'R';
+        case KEY_T: return 'T';
+        case KEY_Y: return 'Y';
+        case KEY_U: return 'U';
+        case KEY_I: return 'I';
+        case KEY_O: return 'O';
+        case KEY_P: return 'P';
+        case KEY_A: return 'A';
+        case KEY_S: return 'S';
+        case KEY_D: return 'D';
+        case KEY_F: return 'F';
+        case KEY_G: return 'G';
+        case KEY_H: return 'H';
+        case KEY_J: return 'J';
+        case KEY_K: return 'K';
+        case KEY_L: return 'L';
+        case KEY_Z: return 'Z';
+        case KEY_X: return 'X';
+        case KEY_C: return 'C';
+        case KEY_V: return 'V';
+        case KEY_B: return 'B';
+        case KEY_N: return 'N';
+        case KEY_M: return 'M';
+        default: return std::nullopt;
+    }
+}
+
 bool keyboardHasPressedKeysym(const SP<IKeyboard>& keyboard, xkb_keysym_t target) {
     if (!keyboard || !keyboard->m_xkbState || target == XKB_KEY_NoSymbol)
         return false;
@@ -2986,7 +3028,7 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
 
     const xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, event.keycode + 8);
 
-    if (handlePickLabelKey(keysym)) {
+    if (handlePickLabelKey(keysym, event.keycode)) {
         info.cancelled = true;
         return;
     }
@@ -3033,6 +3075,8 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window, WindowSetChange
 
     if (!isVisible())
         return;
+
+    clearSpatialPickCache();
 
     if (m_applyingThumbnailNewWindowPlacement && kind == WindowSetChangeKind::MoveToWorkspace)
         return;
@@ -3211,6 +3255,8 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
 void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
     if (!isVisible() || !monitor || !m_state.ownerMonitor)
         return;
+
+    clearSpatialPickCache();
 
     if (m_workspaceTransition.active) {
         clearOverviewWorkspaceTransition();
@@ -4137,6 +4183,10 @@ bool OverviewController::showFocusIndicatorEnabled() const {
 
 bool OverviewController::pickLabelsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:pick_labels_enabled", 0) != 0;
+}
+
+PickLabelsMode OverviewController::pickLabelsMode() const {
+    return parsePickLabelsMode(getConfigString(m_handle, "plugin:hymission:pick_labels_mode", "sequential"));
 }
 
 bool OverviewController::pickLabelsDirectActivateEnabled() const {
@@ -6969,6 +7019,72 @@ std::vector<std::size_t> OverviewController::pickOrderForCurrentState() const {
     }
 
     return computePickOrder(targetRects(), monitorRanks);
+}
+
+const SpatialPickMap& OverviewController::spatialPickMapForCurrentState() const {
+    Rect canvas;
+    bool haveCanvas = false;
+    for (const auto& monitor : m_state.participatingMonitors) {
+        if (!monitor)
+            continue;
+
+        const Rect monitorRect = makeRect(monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y);
+        if (!haveCanvas) {
+            canvas = monitorRect;
+            haveCanvas = true;
+            continue;
+        }
+
+        const double right = std::max(canvas.x + canvas.width, monitorRect.x + monitorRect.width);
+        const double bottom = std::max(canvas.y + canvas.height, monitorRect.y + monitorRect.height);
+        canvas.x = std::min(canvas.x, monitorRect.x);
+        canvas.y = std::min(canvas.y, monitorRect.y);
+        canvas.width = right - canvas.x;
+        canvas.height = bottom - canvas.y;
+    }
+
+    if (!haveCanvas || canvas.width <= 0.0 || canvas.height <= 0.0)
+        canvas = makeRect(0.0, 0.0, 1.0, 1.0);
+
+    const auto cacheMatches = [&] {
+        if (!m_spatialPickCache || m_spatialPickCache->windows.size() != m_state.windows.size())
+            return false;
+        if (std::abs(m_spatialPickCache->canvas.x - canvas.x) > 0.5 || std::abs(m_spatialPickCache->canvas.y - canvas.y) > 0.5 ||
+            std::abs(m_spatialPickCache->canvas.width - canvas.width) > 0.5 || std::abs(m_spatialPickCache->canvas.height - canvas.height) > 0.5)
+            return false;
+
+        for (std::size_t index = 0; index < m_state.windows.size(); ++index) {
+            if (m_spatialPickCache->windows[index].lock() != m_state.windows[index].window)
+                return false;
+        }
+        return true;
+    };
+
+    if (cacheMatches())
+        return m_spatialPickCache->map;
+
+    SpatialPickCache next;
+    next.canvas = canvas;
+    next.windows.reserve(m_state.windows.size());
+    std::vector<SpatialPickPoint> centers;
+    centers.reserve(m_state.windows.size());
+
+    for (const auto& managed : m_state.windows) {
+        next.windows.emplace_back(managed.window);
+        const Rect rect = currentPreviewRect(managed);
+        centers.push_back({
+            .x = std::clamp((rect.centerX() - canvas.x) / canvas.width, 0.0, 1.0),
+            .y = std::clamp((rect.centerY() - canvas.y) / canvas.height, 0.0, 1.0),
+        });
+    }
+
+    next.map = computeSpatialPickMap(centers);
+    m_spatialPickCache = std::move(next);
+    return m_spatialPickCache->map;
+}
+
+void OverviewController::clearSpatialPickCache() {
+    m_spatialPickCache.reset();
 }
 
 Rect OverviewController::workspaceStripBandRectForMonitor(const PHLMONITOR& monitor, const State& state) const {
@@ -9824,6 +9940,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_dropAnimation.reset();
     clearStripWindowDragState();
     clearPickLabelPrefixState();
+    clearSpatialPickCache();
     m_primaryButtonPressed = false;
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
@@ -10228,6 +10345,7 @@ void OverviewController::deactivate() {
     m_dropAnimation.reset();
     clearStripWindowDragState();
     clearPickLabelPrefixState();
+    clearSpatialPickCache();
     clearHiddenStripLayerProxies();
     restoreOverviewRenderState();
     deactivateHooks();
@@ -11068,9 +11186,16 @@ void OverviewController::resolvePickSelection(std::size_t orderIndex) {
     if (orderIndex >= order.size() || order[orderIndex] >= m_state.windows.size())
         return; // no window at that pick order; the key is still swallowed by the caller
 
-    m_state.selectedIndex = order[orderIndex];
-    syncFocusDuringOverviewFromSelection(true, "keyboard-pick");
+    resolvePickWindow(order[orderIndex], "keyboard-pick");
+}
 
+void OverviewController::resolvePickWindow(std::size_t windowIndex, const char* source) {
+    if (windowIndex >= m_state.windows.size())
+        return;
+
+    clearPickLabelPrefixState();
+    m_state.selectedIndex = windowIndex;
+    syncFocusDuringOverviewFromSelection(true, source);
     if (pickLabelsDirectActivateEnabled())
         activateSelection();
     else
@@ -11078,12 +11203,15 @@ void OverviewController::resolvePickSelection(std::size_t orderIndex) {
 }
 
 void OverviewController::armPickLabelPrefixTimeout() {
-    armOrRescheduleTimer(m_pickLetterPrefixTimer, PICK_LABEL_PREFIX_TIMEOUT,
-                          [this](SP<CEventLoopTimer>, void*) { m_pendingPickLetterGroup.reset(); });
+    armOrRescheduleTimer(m_pickLetterPrefixTimer, PICK_LABEL_PREFIX_TIMEOUT, [this](SP<CEventLoopTimer>, void*) {
+        m_pendingPickLetterGroup.reset();
+        m_pendingSpatialPickKeyIndex.reset();
+    });
 }
 
 void OverviewController::clearPickLabelPrefixState() {
     m_pendingPickLetterGroup.reset();
+    m_pendingSpatialPickKeyIndex.reset();
     cancelAndClearTimer(m_pickLetterPrefixTimer);
 }
 
@@ -11094,9 +11222,29 @@ bool OverviewController::pickLabelsInteractionAllowed() const {
     return !m_draggedWindowIndex && !m_pressedWindowIndex && !m_pressedStripIndex;
 }
 
-bool OverviewController::handlePickLabelKey(xkb_keysym_t keysym) {
-    if (!pickLabelsInteractionAllowed())
+bool OverviewController::handlePickLabelKey(xkb_keysym_t keysym, uint32_t physicalKeycode) {
+    if (!pickLabelsInteractionAllowed()) {
+        clearPickLabelPrefixState();
         return false;
+    }
+
+    if (pickLabelsMode() == PickLabelsMode::Spatial) {
+        m_pendingPickLetterGroup.reset();
+        const auto label = spatialPickLabelForPhysicalKeycode(physicalKeycode);
+        if (!label) {
+            clearPickLabelPrefixState();
+            return false;
+        }
+
+        const auto keyIndex = spatialPickKeyIndex(*label);
+        return keyIndex && handleSpatialPickLabelKey(*keyIndex);
+    }
+
+    m_pendingSpatialPickKeyIndex.reset();
+    return handleSequentialPickLabelKey(keysym);
+}
+
+bool OverviewController::handleSequentialPickLabelKey(xkb_keysym_t keysym) {
 
     std::optional<int> digit;
     if (keysym >= XKB_KEY_1 && keysym <= XKB_KEY_9)
@@ -11130,6 +11278,36 @@ bool OverviewController::handlePickLabelKey(xkb_keysym_t keysym) {
 
         m_pendingPickLetterGroup = *letter;
         armPickLabelPrefixTimeout();
+        return true;
+    }
+
+    return false;
+}
+
+bool OverviewController::handleSpatialPickLabelKey(std::size_t keyIndex) {
+    const auto& map = spatialPickMapForCurrentState();
+
+    if (m_pendingSpatialPickKeyIndex) {
+        const std::size_t primaryKeyIndex = *m_pendingSpatialPickKeyIndex;
+        clearPickLabelPrefixState();
+
+        if (const auto windowIndex = resolveSpatialPickChord(map, primaryKeyIndex, keyIndex)) {
+            resolvePickWindow(*windowIndex, "keyboard-pick-spatial");
+            return true;
+        }
+        // An invalid completion becomes a fresh primary key below.
+    }
+
+    const std::size_t routeCount = spatialPickRouteCount(map, keyIndex);
+
+    if (routeCount > 1) {
+        m_pendingSpatialPickKeyIndex = keyIndex;
+        armPickLabelPrefixTimeout();
+        return true;
+    }
+
+    if (const auto windowIndex = resolveSpatialPickPrimary(map, keyIndex)) {
+        resolvePickWindow(*windowIndex, "keyboard-pick-spatial");
         return true;
     }
 
@@ -11662,22 +11840,39 @@ void OverviewController::renderPickLabels() const {
     if (!renderMonitor)
         return;
 
-    const auto       order = pickOrderForCurrentState();
     const CHyprColor textColor = colorWithAlphaMultiplier(closeButtonGlyphColor(), progress);
     const CHyprColor chipColor = colorWithAlphaMultiplier(closeButtonColor(), progress);
     const double     fontSize = std::max(10.0, closeButtonSize() * 0.7);
+    std::vector<std::string> labels(m_state.windows.size());
 
-    for (std::size_t orderIndex = 0; orderIndex < order.size(); ++orderIndex) {
-        const std::size_t windowIndex = order[orderIndex];
-        if (windowIndex >= m_state.windows.size())
+    if (pickLabelsMode() == PickLabelsMode::Spatial) {
+        const auto& map = spatialPickMapForCurrentState();
+        const auto& keys = spatialPickKeys();
+        for (const auto& route : map.routes) {
+            if (route.windowIndex >= labels.size() || route.primaryKeyIndex >= keys.size())
+                continue;
+
+            const std::size_t groupSize = spatialPickRouteCount(map, route.primaryKeyIndex);
+            std::string label(1, keys[route.primaryKeyIndex].label);
+            if (groupSize > 1 && route.canonicalSecondaryKeyIndex < keys.size())
+                label.push_back(keys[route.canonicalSecondaryKeyIndex].label);
+            labels[route.windowIndex] = std::move(label);
+        }
+    } else {
+        const auto order = pickOrderForCurrentState();
+        for (std::size_t orderIndex = 0; orderIndex < order.size(); ++orderIndex) {
+            if (order[orderIndex] < labels.size())
+                labels[order[orderIndex]] = computePickLabel(orderIndex);
+        }
+    }
+
+    for (std::size_t windowIndex = 0; windowIndex < m_state.windows.size(); ++windowIndex) {
+        const std::string& label = labels[windowIndex];
+        if (label.empty())
             continue;
 
         const auto& managed = m_state.windows[windowIndex];
         if (managed.targetMonitor != renderMonitor)
-            continue;
-
-        const std::string label = computePickLabel(orderIndex);
-        if (label.empty())
             continue;
 
         const Rect rectGlobal = currentPreviewRect(managed);

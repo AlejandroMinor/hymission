@@ -115,6 +115,74 @@ int main() {
     ok &= expect(pickLetterGroupAvailable(19, 1), "letter group B should be armed when B1 exists");
     ok &= expect(!pickLetterGroupAvailable(243, 26), "letter groups outside A-Z should be rejected");
 
+    ok &= expect(parsePickLabelsMode("spatial") == PickLabelsMode::Spatial, "spatial pick-label mode should parse");
+    ok &= expect(parsePickLabelsMode("SPATIAL") == PickLabelsMode::Spatial, "spatial pick-label mode should be case-insensitive");
+    ok &= expect(parsePickLabelsMode("unknown") == PickLabelsMode::Sequential, "unknown pick-label modes should preserve sequential behavior");
+    ok &= expect(spatialPickKeys().size() == 36, "spatial pick mode should expose the 36 physical alphanumeric keys");
+
+    const auto spatialF = spatialPickKeyIndex('F');
+    const auto spatialR = spatialPickKeyIndex('R');
+    const auto spatialT = spatialPickKeyIndex('T');
+    const auto spatialC = spatialPickKeyIndex('C');
+    const auto spatialV = spatialPickKeyIndex('V');
+    const auto spatialD = spatialPickKeyIndex('D');
+    const auto spatialG = spatialPickKeyIndex('G');
+    ok &= expect(spatialF && spatialR && spatialT && spatialC && spatialV && spatialD && spatialG, "spatial key lookup should find QWERTY keys");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialF) == SpatialPickDirection::Center, "repeating F should select the center route");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialR) == SpatialPickDirection::Up, "FR should be an upward route");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialT) == SpatialPickDirection::Up, "FT should be an alternate upward neighbor");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialC) == SpatialPickDirection::Down, "FC should be a downward route");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialV) == SpatialPickDirection::Down, "FV should be an alternate downward neighbor");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialD) == SpatialPickDirection::Left, "FD should be a left route");
+    ok &= expect(spatialPickDirectionForKeys(*spatialF, *spatialG) == SpatialPickDirection::Right, "FG should be a right route");
+    ok &= expect(!spatialPickDirectionForKeys(*spatialF, *spatialPickKeyIndex('1')), "non-adjacent second keys should not resolve a direction");
+
+    const auto twoWindowSpatial = computeSpatialPickMap({{0.25, 0.5}, {0.75, 0.5}});
+    std::string leftSpatialKeys;
+    std::string rightSpatialKeys;
+    for (std::size_t keyIndex = 0; keyIndex < spatialPickKeys().size(); ++keyIndex) {
+        const auto windowIndex = resolveSpatialPickPrimary(twoWindowSpatial, keyIndex);
+        if (!windowIndex)
+            continue;
+        (*windowIndex == 0 ? leftSpatialKeys : rightSpatialKeys).push_back(spatialPickKeys()[keyIndex].label);
+    }
+    ok &= expect(leftSpatialKeys == "123456QWERTASDFGZXCV", "two horizontal windows should map the expected physical left-half keys");
+    ok &= expect(rightSpatialKeys == "7890YUIOPHJKLBNM", "two horizontal windows should map all remaining physical keys to the right");
+    ok &= expect(twoWindowSpatial.routes.size() == 2 && twoWindowSpatial.routes[0].direction == SpatialPickDirection::Center &&
+                     twoWindowSpatial.routes[1].direction == SpatialPickDirection::Center &&
+                     twoWindowSpatial.routes[0].primaryKeyIndex != twoWindowSpatial.routes[1].primaryKeyIndex,
+                 "two windows should receive distinct single-key center routes");
+
+    std::vector<SpatialPickPoint> allKeyCenters;
+    for (const auto& key : spatialPickKeys())
+        allKeyCenters.push_back({key.x, key.y});
+    const auto fullSingleKeySpatial = computeSpatialPickMap(allKeyCenters);
+    std::vector<bool> uniquePrimary(spatialPickKeys().size(), false);
+    bool              allCenterRoutes = fullSingleKeySpatial.routes.size() == spatialPickKeys().size();
+    for (const auto& route : fullSingleKeySpatial.routes) {
+        allCenterRoutes &= route.direction == SpatialPickDirection::Center && route.primaryKeyIndex < uniquePrimary.size() && !uniquePrimary[route.primaryKeyIndex];
+        if (route.primaryKeyIndex < uniquePrimary.size())
+            uniquePrimary[route.primaryKeyIndex] = true;
+    }
+    ok &= expect(allCenterRoutes, "up to 36 windows should each receive a unique single-key route");
+
+    SpatialPickMap sharedSpatial;
+    sharedSpatial.routes = {
+        {.windowIndex = 0, .primaryKeyIndex = *spatialF, .direction = SpatialPickDirection::Center, .canonicalSecondaryKeyIndex = *spatialF},
+        {.windowIndex = 1, .primaryKeyIndex = *spatialF, .direction = SpatialPickDirection::Up, .canonicalSecondaryKeyIndex = *spatialR},
+    };
+    ok &= expect(spatialPickRouteCount(sharedSpatial, *spatialF) == 2, "a shared primary should expose both assigned routes");
+    ok &= expect(resolveSpatialPickChord(sharedSpatial, *spatialF, *spatialF) == std::optional<std::size_t>{0}, "FF should resolve the center window");
+    ok &= expect(resolveSpatialPickChord(sharedSpatial, *spatialF, *spatialR) == std::optional<std::size_t>{1}, "FR should resolve the upper window");
+    ok &= expect(resolveSpatialPickChord(sharedSpatial, *spatialF, *spatialT) == std::optional<std::size_t>{1},
+                 "an alternate adjacent upper key should resolve the FR route");
+    ok &= expect(!resolveSpatialPickChord(sharedSpatial, *spatialF, *spatialG), "an unassigned adjacent direction should not resolve");
+
+    std::vector<SpatialPickPoint> overflowSpatialCenters(200, {0.5, 0.5});
+    const auto                    overflowSpatial = computeSpatialPickMap(overflowSpatialCenters);
+    ok &= expect(overflowSpatial.routes.size() >= 36 && overflowSpatial.routes.size() < overflowSpatialCenters.size(),
+                 "windows beyond the available spatial routes should remain unassigned without losing the base key map");
+
     const auto defaultToggle = parseToggleArguments("");
     ok &= expect(defaultToggle && defaultToggle->scope.empty() && defaultToggle->direction == ToggleDirection::Forward,
                  "toggle arguments should default to forward config scope");

@@ -356,6 +356,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("bar_single_mission_control", 0);
     INT_CONF("show_focus_indicator", 0);
     INT_CONF("pick_labels_enabled", 0);
+    STRING_CONF("pick_labels_mode", "sequential");
     INT_CONF("pick_labels_direct_activate", 0);
     INT_CONF("window_decoration_enabled", 1);
     INT_CONF("close_button_enabled", 0);

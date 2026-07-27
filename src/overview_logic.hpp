@@ -68,9 +68,45 @@ enum class ToggleDirection {
     Reverse,
 };
 
+enum class PickLabelsMode {
+    Sequential,
+    Spatial,
+};
+
+enum class SpatialPickDirection {
+    Center,
+    Left,
+    Right,
+    Up,
+    Down,
+};
+
 struct ToggleArguments {
     std::string scope;
     ToggleDirection direction = ToggleDirection::Forward;
+};
+
+struct SpatialPickPoint {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+struct SpatialPickKey {
+    char   label = '\0';
+    double x = 0.0;
+    double y = 0.0;
+};
+
+struct SpatialPickRoute {
+    std::size_t          windowIndex = 0;
+    std::size_t          primaryKeyIndex = 0;
+    SpatialPickDirection direction = SpatialPickDirection::Center;
+    std::size_t          canonicalSecondaryKeyIndex = 0;
+};
+
+struct SpatialPickMap {
+    std::vector<SpatialPickRoute>          routes;
+    std::vector<std::optional<std::size_t>> nearestWindowByKey;
 };
 
 struct WorkspaceStripReservation {
@@ -85,6 +121,14 @@ struct WorkspaceStripReservation {
 [[nodiscard]] std::string                computePickLabel(std::size_t orderIndex);
 [[nodiscard]] std::size_t                computePickOrderIndex(int digit1to9, std::optional<int> letterGroupAtoZ);
 [[nodiscard]] bool                       pickLetterGroupAvailable(std::size_t windowCount, int letterGroupAtoZ);
+[[nodiscard]] PickLabelsMode             parsePickLabelsMode(std::string_view value);
+[[nodiscard]] const std::vector<SpatialPickKey>& spatialPickKeys();
+[[nodiscard]] std::optional<std::size_t> spatialPickKeyIndex(char label);
+[[nodiscard]] std::optional<SpatialPickDirection> spatialPickDirectionForKeys(std::size_t primaryKeyIndex, std::size_t secondaryKeyIndex);
+[[nodiscard]] SpatialPickMap             computeSpatialPickMap(const std::vector<SpatialPickPoint>& windowCenters);
+[[nodiscard]] std::size_t                spatialPickRouteCount(const SpatialPickMap& map, std::size_t primaryKeyIndex);
+[[nodiscard]] std::optional<std::size_t> resolveSpatialPickPrimary(const SpatialPickMap& map, std::size_t primaryKeyIndex);
+[[nodiscard]] std::optional<std::size_t> resolveSpatialPickChord(const SpatialPickMap& map, std::size_t primaryKeyIndex, std::size_t secondaryKeyIndex);
 [[nodiscard]] std::optional<ToggleArguments> parseToggleArguments(std::string_view value);
 [[nodiscard]] std::optional<std::string>     legacyFullscreenDispatcherArguments(std::string_view mode, std::string_view action);
 [[nodiscard]] Rect                       lerpRect(const Rect& from, const Rect& to, double t);

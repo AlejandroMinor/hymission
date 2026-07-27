@@ -243,6 +243,12 @@ class OverviewController {
         std::chrono::steady_clock::time_point start = {};
     };
 
+    struct SpatialPickCache {
+        std::vector<PHLWINDOWREF> windows;
+        Rect                      canvas;
+        SpatialPickMap            map;
+    };
+
     struct State {
         Phase                                  phase = Phase::Inactive;
         PHLMONITOR                             ownerMonitor;
@@ -479,6 +485,7 @@ class OverviewController {
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         pickLabelsEnabled() const;
+    [[nodiscard]] PickLabelsMode pickLabelsMode() const;
     [[nodiscard]] bool         pickLabelsDirectActivateEnabled() const;
     [[nodiscard]] double       focusHoverThickness() const;
     [[nodiscard]] double       focusSelectedThickness() const;
@@ -724,10 +731,15 @@ class OverviewController {
     [[nodiscard]] bool moveSelectionCircular(int step = 1, const char* source = "?");
     void activateSelection();
     [[nodiscard]] bool pickLabelsInteractionAllowed() const;
-    [[nodiscard]] bool handlePickLabelKey(xkb_keysym_t keysym);
+    [[nodiscard]] bool handlePickLabelKey(xkb_keysym_t keysym, uint32_t physicalKeycode);
+    [[nodiscard]] bool handleSequentialPickLabelKey(xkb_keysym_t keysym);
+    [[nodiscard]] bool handleSpatialPickLabelKey(std::size_t keyIndex);
     void               resolvePickSelection(std::size_t orderIndex);
+    void               resolvePickWindow(std::size_t windowIndex, const char* source);
     void               armPickLabelPrefixTimeout();
     void               clearPickLabelPrefixState();
+    void               clearSpatialPickCache();
+    [[nodiscard]] const SpatialPickMap& spatialPickMapForCurrentState() const;
     void notify(const std::string& message, const CHyprColor& color, float durationMs) const;
     void debugLog(const std::string& message) const;
     void debugSurfaceLog(const std::string& message) const;
@@ -915,6 +927,8 @@ class OverviewController {
     std::optional<std::size_t>    m_dragDimStripIndex;
     std::chrono::steady_clock::time_point m_dragDimStart = {};
     std::optional<int>         m_pendingPickLetterGroup; // 0=A, 1=B, ... 25=Z
+    std::optional<std::size_t> m_pendingSpatialPickKeyIndex;
+    mutable std::optional<SpatialPickCache> m_spatialPickCache;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};

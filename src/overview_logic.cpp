@@ -56,6 +56,135 @@ bool equalsAsciiInsensitive(std::string_view value, std::string_view expected) {
     return true;
 }
 
+struct SpatialPickSlot {
+    std::size_t          primaryKeyIndex = 0;
+    SpatialPickDirection direction = SpatialPickDirection::Center;
+    std::size_t          canonicalSecondaryKeyIndex = 0;
+    double               x = 0.0;
+    double               y = 0.0;
+};
+
+std::vector<std::size_t> minimumCostAssignment(const std::vector<std::vector<double>>& costs) {
+    if (costs.empty() || costs.front().empty() || costs.size() > costs.front().size())
+        return {};
+
+    const std::size_t rows = costs.size();
+    const std::size_t cols = costs.front().size();
+    std::vector<double>     u(rows + 1);
+    std::vector<double>     v(cols + 1);
+    std::vector<std::size_t> p(cols + 1);
+    std::vector<std::size_t> way(cols + 1);
+
+    for (std::size_t row = 1; row <= rows; ++row) {
+        p[0] = row;
+        std::size_t currentColumn = 0;
+        std::vector<double> minValue(cols + 1, std::numeric_limits<double>::infinity());
+        std::vector<bool>   used(cols + 1, false);
+
+        do {
+            used[currentColumn] = true;
+            const std::size_t currentRow = p[currentColumn];
+            double            delta = std::numeric_limits<double>::infinity();
+            std::size_t       nextColumn = 0;
+
+            for (std::size_t column = 1; column <= cols; ++column) {
+                if (used[column])
+                    continue;
+
+                const double current = costs[currentRow - 1][column - 1] - u[currentRow] - v[column];
+                if (current < minValue[column]) {
+                    minValue[column] = current;
+                    way[column] = currentColumn;
+                }
+
+                if (minValue[column] < delta || (minValue[column] == delta && column < nextColumn)) {
+                    delta = minValue[column];
+                    nextColumn = column;
+                }
+            }
+
+            for (std::size_t column = 0; column <= cols; ++column) {
+                if (used[column]) {
+                    u[p[column]] += delta;
+                    v[column] -= delta;
+                } else {
+                    minValue[column] -= delta;
+                }
+            }
+
+            currentColumn = nextColumn;
+        } while (p[currentColumn] != 0);
+
+        do {
+            const std::size_t previousColumn = way[currentColumn];
+            p[currentColumn] = p[previousColumn];
+            currentColumn = previousColumn;
+        } while (currentColumn != 0);
+    }
+
+    std::vector<std::size_t> assignment(rows, cols);
+    for (std::size_t column = 1; column <= cols; ++column) {
+        if (p[column] != 0)
+            assignment[p[column] - 1] = column - 1;
+    }
+    return assignment;
+}
+
+std::vector<SpatialPickSlot> spatialPickSlots() {
+    const auto& keys = spatialPickKeys();
+    std::vector<SpatialPickSlot> slots;
+    slots.reserve(keys.size() * 5);
+
+    for (std::size_t primary = 0; primary < keys.size(); ++primary) {
+        slots.push_back({
+            .primaryKeyIndex = primary,
+            .direction = SpatialPickDirection::Center,
+            .canonicalSecondaryKeyIndex = primary,
+            .x = keys[primary].x,
+            .y = keys[primary].y,
+        });
+    }
+
+    constexpr SpatialPickDirection DIRECTIONS[] = {
+        SpatialPickDirection::Left,
+        SpatialPickDirection::Right,
+        SpatialPickDirection::Up,
+        SpatialPickDirection::Down,
+    };
+
+    for (std::size_t primary = 0; primary < keys.size(); ++primary) {
+        for (const auto direction : DIRECTIONS) {
+            std::optional<std::size_t> canonical;
+            double                     bestDistance = std::numeric_limits<double>::infinity();
+            for (std::size_t secondary = 0; secondary < keys.size(); ++secondary) {
+                if (spatialPickDirectionForKeys(primary, secondary) != direction)
+                    continue;
+
+                const double dx = keys[secondary].x - keys[primary].x;
+                const double dy = keys[secondary].y - keys[primary].y;
+                const double distance = dx * dx + dy * dy;
+                if (!canonical || distance < bestDistance || (distance == bestDistance && secondary < *canonical)) {
+                    canonical = secondary;
+                    bestDistance = distance;
+                }
+            }
+
+            if (!canonical)
+                continue;
+
+            slots.push_back({
+                .primaryKeyIndex = primary,
+                .direction = direction,
+                .canonicalSecondaryKeyIndex = *canonical,
+                .x = keys[*canonical].x,
+                .y = keys[*canonical].y,
+            });
+        }
+    }
+
+    return slots;
+}
+
 } // namespace
 
 std::optional<std::size_t> hitTest(const std::vector<Rect>& rects, double x, double y) {
@@ -212,6 +341,170 @@ bool pickLetterGroupAvailable(std::size_t windowCount, int letterGroupAtoZ) {
         return false;
 
     return computePickOrderIndex(1, letterGroupAtoZ) < windowCount;
+}
+
+PickLabelsMode parsePickLabelsMode(std::string_view value) {
+    value = trimAsciiWhitespace(value);
+    return equalsAsciiInsensitive(value, "spatial") ? PickLabelsMode::Spatial : PickLabelsMode::Sequential;
+}
+
+const std::vector<SpatialPickKey>& spatialPickKeys() {
+    static const std::vector<SpatialPickKey> KEYS = {
+        {'1', 1.5 / 13.0, 0.5 / 4.0}, {'2', 2.5 / 13.0, 0.5 / 4.0}, {'3', 3.5 / 13.0, 0.5 / 4.0},
+        {'4', 4.5 / 13.0, 0.5 / 4.0}, {'5', 5.5 / 13.0, 0.5 / 4.0}, {'6', 6.5 / 13.0, 0.5 / 4.0},
+        {'7', 7.5 / 13.0, 0.5 / 4.0}, {'8', 8.5 / 13.0, 0.5 / 4.0}, {'9', 9.5 / 13.0, 0.5 / 4.0},
+        {'0', 10.5 / 13.0, 0.5 / 4.0},
+        {'Q', 2.0 / 13.0, 1.5 / 4.0}, {'W', 3.0 / 13.0, 1.5 / 4.0}, {'E', 4.0 / 13.0, 1.5 / 4.0},
+        {'R', 5.0 / 13.0, 1.5 / 4.0}, {'T', 6.0 / 13.0, 1.5 / 4.0}, {'Y', 7.0 / 13.0, 1.5 / 4.0},
+        {'U', 8.0 / 13.0, 1.5 / 4.0}, {'I', 9.0 / 13.0, 1.5 / 4.0}, {'O', 10.0 / 13.0, 1.5 / 4.0},
+        {'P', 11.0 / 13.0, 1.5 / 4.0},
+        {'A', 2.25 / 13.0, 2.5 / 4.0}, {'S', 3.25 / 13.0, 2.5 / 4.0}, {'D', 4.25 / 13.0, 2.5 / 4.0},
+        {'F', 5.25 / 13.0, 2.5 / 4.0}, {'G', 6.25 / 13.0, 2.5 / 4.0}, {'H', 7.25 / 13.0, 2.5 / 4.0},
+        {'J', 8.25 / 13.0, 2.5 / 4.0}, {'K', 9.25 / 13.0, 2.5 / 4.0}, {'L', 10.25 / 13.0, 2.5 / 4.0},
+        {'Z', 2.75 / 13.0, 3.5 / 4.0}, {'X', 3.75 / 13.0, 3.5 / 4.0}, {'C', 4.75 / 13.0, 3.5 / 4.0},
+        {'V', 5.75 / 13.0, 3.5 / 4.0}, {'B', 6.75 / 13.0, 3.5 / 4.0}, {'N', 7.75 / 13.0, 3.5 / 4.0},
+        {'M', 8.75 / 13.0, 3.5 / 4.0},
+    };
+    return KEYS;
+}
+
+std::optional<std::size_t> spatialPickKeyIndex(char label) {
+    label = static_cast<char>(std::toupper(static_cast<unsigned char>(label)));
+    const auto& keys = spatialPickKeys();
+    const auto  it = std::find_if(keys.begin(), keys.end(), [&](const SpatialPickKey& key) { return key.label == label; });
+    if (it == keys.end())
+        return std::nullopt;
+    return static_cast<std::size_t>(std::distance(keys.begin(), it));
+}
+
+std::optional<SpatialPickDirection> spatialPickDirectionForKeys(std::size_t primaryKeyIndex, std::size_t secondaryKeyIndex) {
+    const auto& keys = spatialPickKeys();
+    if (primaryKeyIndex >= keys.size() || secondaryKeyIndex >= keys.size())
+        return std::nullopt;
+    if (primaryKeyIndex == secondaryKeyIndex)
+        return SpatialPickDirection::Center;
+
+    const double dx = keys[secondaryKeyIndex].x - keys[primaryKeyIndex].x;
+    const double dy = keys[secondaryKeyIndex].y - keys[primaryKeyIndex].y;
+    constexpr double EPSILON = 1e-9;
+    constexpr double KEY_X = 1.0 / 13.0;
+    constexpr double KEY_Y = 1.0 / 4.0;
+
+    if (std::abs(dy) <= EPSILON && std::abs(std::abs(dx) - KEY_X) <= EPSILON)
+        return dx < 0.0 ? SpatialPickDirection::Left : SpatialPickDirection::Right;
+
+    if (std::abs(std::abs(dy) - KEY_Y) <= EPSILON && std::abs(dx) <= 0.75 / 13.0 + EPSILON)
+        return dy < 0.0 ? SpatialPickDirection::Up : SpatialPickDirection::Down;
+
+    return std::nullopt;
+}
+
+SpatialPickMap computeSpatialPickMap(const std::vector<SpatialPickPoint>& windowCenters) {
+    SpatialPickMap result;
+    const auto&    keys = spatialPickKeys();
+    result.nearestWindowByKey.resize(keys.size());
+    if (windowCenters.empty())
+        return result;
+
+    for (std::size_t keyIndex = 0; keyIndex < keys.size(); ++keyIndex) {
+        std::size_t nearest = 0;
+        double      nearestDistance = std::numeric_limits<double>::infinity();
+        for (std::size_t windowIndex = 0; windowIndex < windowCenters.size(); ++windowIndex) {
+            const double dx = windowCenters[windowIndex].x - keys[keyIndex].x;
+            const double dy = windowCenters[windowIndex].y - keys[keyIndex].y;
+            const double distance = dx * dx + dy * dy;
+            if (distance < nearestDistance) {
+                nearest = windowIndex;
+                nearestDistance = distance;
+            }
+        }
+        result.nearestWindowByKey[keyIndex] = nearest;
+    }
+
+    const auto slots = spatialPickSlots();
+    if (slots.empty())
+        return result;
+
+    const auto routeCost = [&](std::size_t windowIndex, std::size_t slotIndex) {
+        const double dx = windowCenters[windowIndex].x - slots[slotIndex].x;
+        const double dy = windowCenters[windowIndex].y - slots[slotIndex].y;
+        const double directionPenalty = slots[slotIndex].direction == SpatialPickDirection::Center ? 0.0 : 4.0;
+        return directionPenalty + dx * dx + dy * dy + static_cast<double>(slotIndex) * 1e-10 + static_cast<double>(windowIndex) * 1e-12;
+    };
+
+    std::vector<std::optional<std::size_t>> slotForWindow(windowCenters.size());
+    if (windowCenters.size() <= slots.size()) {
+        std::vector<std::vector<double>> costs(windowCenters.size(), std::vector<double>(slots.size()));
+        for (std::size_t windowIndex = 0; windowIndex < windowCenters.size(); ++windowIndex) {
+            for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex)
+                costs[windowIndex][slotIndex] = routeCost(windowIndex, slotIndex);
+        }
+
+        const auto assignment = minimumCostAssignment(costs);
+        for (std::size_t windowIndex = 0; windowIndex < assignment.size(); ++windowIndex)
+            slotForWindow[windowIndex] = assignment[windowIndex];
+    } else {
+        std::vector<std::vector<double>> costs(slots.size(), std::vector<double>(windowCenters.size()));
+        for (std::size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
+            for (std::size_t windowIndex = 0; windowIndex < windowCenters.size(); ++windowIndex)
+                costs[slotIndex][windowIndex] = routeCost(windowIndex, slotIndex);
+        }
+
+        const auto assignment = minimumCostAssignment(costs);
+        for (std::size_t slotIndex = 0; slotIndex < assignment.size(); ++slotIndex)
+            slotForWindow[assignment[slotIndex]] = slotIndex;
+    }
+
+    for (std::size_t windowIndex = 0; windowIndex < slotForWindow.size(); ++windowIndex) {
+        if (!slotForWindow[windowIndex])
+            continue;
+        const auto& slot = slots[*slotForWindow[windowIndex]];
+        result.routes.push_back({
+            .windowIndex = windowIndex,
+            .primaryKeyIndex = slot.primaryKeyIndex,
+            .direction = slot.direction,
+            .canonicalSecondaryKeyIndex = slot.canonicalSecondaryKeyIndex,
+        });
+    }
+
+    return result;
+}
+
+std::size_t spatialPickRouteCount(const SpatialPickMap& map, std::size_t primaryKeyIndex) {
+    return static_cast<std::size_t>(
+        std::ranges::count_if(map.routes, [&](const SpatialPickRoute& route) { return route.primaryKeyIndex == primaryKeyIndex; }));
+}
+
+std::optional<std::size_t> resolveSpatialPickPrimary(const SpatialPickMap& map, std::size_t primaryKeyIndex) {
+    const SpatialPickRoute* route = nullptr;
+    std::size_t             routeCount = 0;
+    for (const auto& candidate : map.routes) {
+        if (candidate.primaryKeyIndex != primaryKeyIndex)
+            continue;
+        route = &candidate;
+        ++routeCount;
+    }
+
+    if (routeCount == 1)
+        return route->windowIndex;
+    if (routeCount > 1)
+        return std::nullopt;
+    if (primaryKeyIndex < map.nearestWindowByKey.size())
+        return map.nearestWindowByKey[primaryKeyIndex];
+    return std::nullopt;
+}
+
+std::optional<std::size_t> resolveSpatialPickChord(const SpatialPickMap& map, std::size_t primaryKeyIndex, std::size_t secondaryKeyIndex) {
+    const auto direction = spatialPickDirectionForKeys(primaryKeyIndex, secondaryKeyIndex);
+    if (!direction)
+        return std::nullopt;
+
+    const auto route = std::find_if(map.routes.begin(), map.routes.end(), [&](const SpatialPickRoute& candidate) {
+        return candidate.primaryKeyIndex == primaryKeyIndex && candidate.direction == *direction;
+    });
+    if (route == map.routes.end())
+        return std::nullopt;
+    return route->windowIndex;
 }
 
 std::optional<ToggleArguments> parseToggleArguments(std::string_view value) {

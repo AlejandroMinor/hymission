@@ -263,6 +263,15 @@ gesture-only 参数：
 - 单个 preview 尺寸小于字号的 4 倍（与 `closeButtonRectFor()` 的同款比例阈值）时跳过该 preview 的 pick label 绘制，避免 chip 溢出到相邻 preview；该尺寸判断只影响渲染，不影响按键解析——对应的数字/字母键依然能选中这个窗口（连同鼠标/方向键），只是看不到对应的数字
 - pick label 是本节现有键盘导航（方向键、`Return`、`Esc`）之外的补充选择方式，不改变、不替代既有导航语义
 
+`pick_labels_mode = spatial` 时改用键盘几何映射：
+
+- 使用 ANSI/QWERTY 主键区的 36 个物理字母数字键，按键位置固定，不受当前 XKB layout、Shift 或 Caps Lock 影响
+- 将所有参与 monitor 视为一张全局逻辑画布，按键坐标与 preview 中心坐标归一化后匹配；映射在窗口集合不变的选中/展开动画期间保持稳定
+- 优先为最多 36 个窗口分配互不重复的单键路径，其他未作为代表标签的按键仍选择几何上最近的窗口
+- 更密集的窗口集合允许多个窗口共享起始键；再次按起始键选择中心候选，同一行直接邻键选择左右候选，相邻行且横向偏差不超过 `0.75` 键宽的键选择上下候选
+- 共享路径标签显示规范两键序列（如 `FF`、`FR`）；同方向上的其他有效相邻键也可完成选择
+- 无效的第二个字母数字键会作为新的起始键重新处理；`Esc`、方向键和 `Return` 取消待定路径后保留原语义；超出全部空间路径容量的窗口继续支持鼠标和方向键
+
 ### 6.4 overview 打开期间的集合变化
 
 - 如果 overview 打开期间有窗口关闭、打开、移动 workspace 或 monitor，且该变化会影响当前 scope，overview 应重建当前可见状态
@@ -363,6 +372,7 @@ workspace 切换补充语义：
 - `workspace_strip_gap`
 - `bar_single_mission_control`
 - `pick_labels_enabled`
+- `pick_labels_mode`
 - `pick_labels_direct_activate`
 
 约束：
@@ -390,6 +400,7 @@ workspace 切换补充语义：
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - `bar_single_mission_control` 只在当前 overview scope 同时展示多个 workspace 时生效；默认建议保持 `0`，这样 bar 继续显示正常的编号 workspace；`1` 时通过临时 workspace rename 为外部 bar 提供“只保留一个 Mission Control 项”的过滤前缀，不承诺对 shell / dock 做更深的直接集成
 - `pick_labels_enabled` 控制是否在每个 preview 上叠加数字/字母 pick label，并让对应按键直接选中该 preview；默认 `0`
+- `pick_labels_mode` 支持 `sequential`（默认）和 `spatial`；非法值回退为 `sequential`
 - pick label 复用 `close_button_color`（背景）、`close_button_glyph_color`（文字）和 `close_button_size`（字号比例）；不引入独立的颜色/大小配置
 - `pick_labels_direct_activate` 只在 `pick_labels_enabled = 1` 时生效，控制命中 pick label 后是立即激活并退出 overview（`1`），还是只切换选中项、仍需 `Return` 确认（`0`，默认）
 - 除 `overview_focus_follows_mouse` 和 selected-preview hover relayout 的上述细项外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
