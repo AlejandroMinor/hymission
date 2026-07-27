@@ -1491,6 +1491,13 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
+Rect workspaceThumbnailGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    Rect rect = stateSnapshotGlobalRectForWindow(window, goal);
+    if (window && window->m_isFloating)
+        rect = translateRect(rect, window->m_floatingOffset.x, window->m_floatingOffset.y);
+    return rect;
+}
+
 Rect layoutAnchorGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     if (!window)
         return {};
@@ -12192,6 +12199,30 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                 .syntheticEmpty = false,
             }};
             previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
+
+            // A strip card is a miniature of the workspace, not another
+            // Mission Control layout. buildState() is still useful here for
+            // collecting the correct windows and fullscreen metadata, but its
+            // computed slots belong to the main overview. Restore every
+            // window to its real workspace geometry before rendering the
+            // offscreen snapshot. Workspace render offsets are deliberately
+            // excluded because the target workspace is temporarily made
+            // visible at a zero offset below.
+            for (auto& managed : previewState.windows) {
+                const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(managed.window);
+                const Rect workspaceGlobal = workspaceThumbnailGlobalRectForWindow(managed.window, useGoalGeometry);
+                const Rect monitorLocal = rectToMonitorLocal(workspaceGlobal, monitor);
+                managed.naturalGlobal = workspaceGlobal;
+                managed.exitGlobal = workspaceGlobal;
+                managed.relayoutFromGlobal = workspaceGlobal;
+                managed.targetGlobal = workspaceGlobal;
+                managed.slot = {
+                    .index = managed.slot.index,
+                    .natural = monitorLocal,
+                    .target = monitorLocal,
+                    .scale = 1.0,
+                };
+            }
         } else {
             previewState.ownerMonitor = monitor;
             previewState.collectionPolicy = loadCollectionPolicy(ScopeOverride::OnlyCurrentWorkspace);
