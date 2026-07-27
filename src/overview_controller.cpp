@@ -554,6 +554,71 @@ std::optional<char> spatialPickLabelForPhysicalKeycode(uint32_t keycode) {
     }
 }
 
+std::optional<uint32_t> spatialPickPhysicalKeycodeForLabel(char label) {
+    switch (label) {
+        case '1': return KEY_1;
+        case '2': return KEY_2;
+        case '3': return KEY_3;
+        case '4': return KEY_4;
+        case '5': return KEY_5;
+        case '6': return KEY_6;
+        case '7': return KEY_7;
+        case '8': return KEY_8;
+        case '9': return KEY_9;
+        case '0': return KEY_0;
+        case 'Q': return KEY_Q;
+        case 'W': return KEY_W;
+        case 'E': return KEY_E;
+        case 'R': return KEY_R;
+        case 'T': return KEY_T;
+        case 'Y': return KEY_Y;
+        case 'U': return KEY_U;
+        case 'I': return KEY_I;
+        case 'O': return KEY_O;
+        case 'P': return KEY_P;
+        case 'A': return KEY_A;
+        case 'S': return KEY_S;
+        case 'D': return KEY_D;
+        case 'F': return KEY_F;
+        case 'G': return KEY_G;
+        case 'H': return KEY_H;
+        case 'J': return KEY_J;
+        case 'K': return KEY_K;
+        case 'L': return KEY_L;
+        case 'Z': return KEY_Z;
+        case 'X': return KEY_X;
+        case 'C': return KEY_C;
+        case 'V': return KEY_V;
+        case 'B': return KEY_B;
+        case 'N': return KEY_N;
+        case 'M': return KEY_M;
+        default: return std::nullopt;
+    }
+}
+
+std::string spatialPickDisplayLabel(const SP<IKeyboard>& keyboard, char physicalLabel) {
+    const auto fallback = std::string(1, physicalLabel);
+    if (!keyboard || !keyboard->m_xkbState)
+        return fallback;
+
+    const auto physicalKeycode = spatialPickPhysicalKeycodeForLabel(physicalLabel);
+    const auto layout = keyboard->getActiveLayoutIndex();
+    auto* const keymap = xkb_state_get_keymap(keyboard->m_xkbState);
+    if (!physicalKeycode || !layout || !keymap)
+        return fallback;
+
+    const xkb_keysym_t* symbols = nullptr;
+    const auto symbolCount = xkb_keymap_key_get_syms_by_level(keymap, *physicalKeycode + 8, *layout, 0, &symbols);
+    if (symbolCount <= 0 || !symbols)
+        return fallback;
+
+    char utf8[64] = {};
+    if (xkb_keysym_to_utf8(xkb_keysym_to_upper(symbols[0]), utf8, sizeof(utf8)) <= 0 || utf8[0] == '\0')
+        return fallback;
+
+    return utf8;
+}
+
 bool keyboardHasPressedKeysym(const SP<IKeyboard>& keyboard, xkb_keysym_t target) {
     if (!keyboard || !keyboard->m_xkbState || target == XKB_KEY_NoSymbol)
         return false;
@@ -2301,6 +2366,11 @@ bool OverviewController::shouldUseRecentWindowOrdering(const State& state) const
 }
 
 SP<IKeyboard> OverviewController::inputKeyboardWithState() const {
+    for (const auto& candidate : g_pInputManager->m_keyboards) {
+        if (candidate && candidate->m_active && candidate->m_xkbState)
+            return candidate;
+    }
+
     for (const auto& candidate : g_pInputManager->m_keyboards) {
         if (candidate && candidate->m_xkbState)
             return candidate;
@@ -11848,14 +11918,15 @@ void OverviewController::renderPickLabels() const {
     if (pickLabelsMode() == PickLabelsMode::Spatial) {
         const auto& map = spatialPickMapForCurrentState();
         const auto& keys = spatialPickKeys();
+        const auto keyboard = inputKeyboardWithState();
         for (const auto& route : map.routes) {
             if (route.windowIndex >= labels.size() || route.primaryKeyIndex >= keys.size())
                 continue;
 
             const std::size_t groupSize = spatialPickRouteCount(map, route.primaryKeyIndex);
-            std::string label(1, keys[route.primaryKeyIndex].label);
+            std::string label = spatialPickDisplayLabel(keyboard, keys[route.primaryKeyIndex].label);
             if (groupSize > 1 && route.canonicalSecondaryKeyIndex < keys.size())
-                label.push_back(keys[route.canonicalSecondaryKeyIndex].label);
+                label += spatialPickDisplayLabel(keyboard, keys[route.canonicalSecondaryKeyIndex].label);
             labels[route.windowIndex] = std::move(label);
         }
     } else {

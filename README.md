@@ -375,7 +375,7 @@ hl.config({
 | `hide_hyprbars_during_overview` | bool | `0` | Suppress drawing of official `hyprbars` title bars while overview renders, without changing their reserved decoration space. This is a no-op unless `hyprbars` is loaded. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
 | `pick_labels_enabled` | bool | `0` | Show keyboard pick labels on previews and enable direct keyboard selection in the configured `pick_labels_mode`. Reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; previews too small for a legible chip skip drawing it but remain selectable. |
-| `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI/QWERTY alphanumeric block to preview centers across the participating monitors. Up to 36 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
+| `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI alphanumeric block to preview centers across the participating monitors. Up to 36 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
 | `pick_labels_direct_activate` | bool | `0` | Only applies when `pick_labels_enabled = 1`. `0` only moves the selection (still requires `Return` to confirm, same as arrow keys); `1` activates and closes overview immediately when a pick label is hit. |
 
 Behavior notes:
@@ -384,7 +384,7 @@ Behavior notes:
 - In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
 - Toggle switch mode keeps current hover semantics: if `overview_focus_follows_mouse = 1`, moving the pointer can still retarget the final committed selection during the switch session.
 - In `sequential` mode, past the 9th window a letter key (`A`-`Z`) arms a ~1.5s prefix waiting for its digit (e.g. `A` then `2` picks `A2`); any other key cancels the prefix without losing its own normal effect (e.g. `Esc` still closes overview).
-- In `spatial` mode, key positions are physical and layout-independent. A shared primary waits up to ~1.5s for the same key (center) or an adjacent key in the labelled direction; equivalent adjacent keys in that direction are also accepted.
+- In `spatial` mode, key positions and activation use physical keycodes, while badge text follows the active keyboard's current XKB layout automatically (using its unshifted level, so Shift/Caps Lock do not change the badge). A shared primary waits up to ~1.5s for the same key (center) or an adjacent key in the labelled direction; equivalent adjacent keys in that direction are also accepted.
 
 ### Appearance options
 
