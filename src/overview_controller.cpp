@@ -8424,19 +8424,34 @@ double OverviewController::draggedPreviewTargetScaleForHover() const {
 
     const auto& dragged = m_state.windows[*m_draggedWindowIndex];
     const Rect sourcePreview = currentPreviewRect(dragged);
-    if (!dragged.targetMonitor || sourcePreview.width <= 1.0 || !m_state.hoveredStripIndex ||
-        *m_state.hoveredStripIndex >= m_state.stripEntries.size())
+    if (!dragged.targetMonitor || sourcePreview.width <= 1.0)
         return DRAG_PREVIEW_SCALE;
 
-    const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
-    if (entry.monitor != dragged.targetMonitor || entry.newWorkspaceSlot)
+    const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
+    const Rect stripBand = workspaceStripBandRectForMonitor(dragged.targetMonitor, m_state);
+    if (!rectContainsPoint(stripBand, pointer.x, pointer.y))
         return DRAG_PREVIEW_SCALE;
 
-    const Rect thumbnail = animatedWorkspaceStripRect(entry.rect, dragged.targetMonitor);
+    const WorkspaceStripEntry* referenceEntry = nullptr;
+    if (m_state.hoveredStripIndex && *m_state.hoveredStripIndex < m_state.stripEntries.size()) {
+        const auto& hovered = m_state.stripEntries[*m_state.hoveredStripIndex];
+        if (hovered.monitor == dragged.targetMonitor)
+            referenceEntry = &hovered;
+    }
+    if (!referenceEntry) {
+        const auto it = std::find_if(m_state.stripEntries.begin(), m_state.stripEntries.end(),
+                                     [&](const WorkspaceStripEntry& entry) { return entry.monitor == dragged.targetMonitor && entry.rect.width > 1.0; });
+        if (it != m_state.stripEntries.end())
+            referenceEntry = &*it;
+    }
+    if (!referenceEntry)
+        return DRAG_PREVIEW_SCALE;
+
+    const Rect thumbnail = animatedWorkspaceStripRect(referenceEntry->rect, dragged.targetMonitor);
     if (thumbnail.width <= 1.0)
         return DRAG_PREVIEW_SCALE;
 
-    return std::clamp(std::min(DRAG_PREVIEW_SCALE, thumbnail.width * DRAG_PREVIEW_STRIP_WIDTH_RATIO / sourcePreview.width), 0.05, 1.0);
+    return std::clamp(thumbnail.width * DRAG_PREVIEW_STRIP_WIDTH_RATIO / sourcePreview.width, 0.05, 1.0);
 }
 
 double OverviewController::draggedPreviewScale() const {
