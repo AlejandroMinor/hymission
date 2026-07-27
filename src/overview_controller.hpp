@@ -666,6 +666,7 @@ class OverviewController {
     [[nodiscard]] PHLWORKSPACE               thumbnailWorkspaceAtPoint(double x, double y) const;
     [[nodiscard]] std::optional<DragPreviewTarget> draggedPreviewTargetFor(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<Rect>              draggedPreviewRectFor(const PHLWINDOW& window) const;
+    [[nodiscard]] double                           draggedPreviewTargetScaleForHover() const;
     [[nodiscard]] double                           draggedPreviewScale() const;
     [[nodiscard]] double                           dropAnimationProgress() const;
     [[nodiscard]] bool                             dropAnimationMatchesEntry(const WorkspaceStripEntry& entry) const;
@@ -934,6 +935,7 @@ class OverviewController {
     mutable std::optional<SpatialPickCache> m_spatialPickCache;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
+    double                    m_draggedWindowScaleFrom = 1.0;
     double                    m_draggedWindowTargetScale = 0.65;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};
     Vector2D                  m_hoverSelectionAnchorPointer;

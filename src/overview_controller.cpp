@@ -2793,7 +2793,7 @@ void OverviewController::renderStage(eRenderStage stage) {
             scheduleWorkspaceStripSnapshotRefresh();
         }
         if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 || m_dropAnimation ||
-             (m_draggedWindowIndex && draggedPreviewScale() > m_draggedWindowTargetScale + 0.001)) &&
+             (m_draggedWindowIndex && std::abs(draggedPreviewScale() - m_draggedWindowTargetScale) > 0.001)) &&
             !m_deactivatePending) {
             damageOwnedMonitors();
             if (m_postOpenRefreshFrames > 0)
@@ -2838,18 +2838,8 @@ void OverviewController::handleMouseMove() {
                 m_dropAnimation.reset();
                 m_draggedWindowIndex = m_pressedWindowIndex;
                 m_draggedWindowPointerOffset = Vector2D{pointer.x - rect.x, pointer.y - rect.y};
+                m_draggedWindowScaleFrom = 1.0;
                 m_draggedWindowTargetScale = DRAG_PREVIEW_SCALE;
-                double stripThumbnailWidth = std::numeric_limits<double>::max();
-                for (const auto& entry : m_state.stripEntries) {
-                    if (entry.monitor != managed.targetMonitor || entry.newWorkspaceSlot || entry.rect.width <= 1.0)
-                        continue;
-                    stripThumbnailWidth = std::min(stripThumbnailWidth, entry.rect.width);
-                }
-                if (stripThumbnailWidth != std::numeric_limits<double>::max() && rect.width > 1.0) {
-                    m_draggedWindowTargetScale = std::min(m_draggedWindowTargetScale,
-                                                          stripThumbnailWidth * DRAG_PREVIEW_STRIP_WIDTH_RATIO / rect.width);
-                }
-                m_draggedWindowTargetScale = std::clamp(m_draggedWindowTargetScale, 0.05, 1.0);
                 m_draggedWindowStart = std::chrono::steady_clock::now();
                 m_dragDimStripIndex = m_state.hoveredStripIndex;
                 m_dragDimStart = m_dragDimStripIndex ? m_draggedWindowStart : std::chrono::steady_clock::time_point{};
@@ -8437,6 +8427,27 @@ std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& w
     return following;
 }
 
+double OverviewController::draggedPreviewTargetScaleForHover() const {
+    if (!m_draggedWindowIndex || *m_draggedWindowIndex >= m_state.windows.size())
+        return DRAG_PREVIEW_SCALE;
+
+    const auto& dragged = m_state.windows[*m_draggedWindowIndex];
+    const Rect sourcePreview = currentPreviewRect(dragged);
+    if (!dragged.targetMonitor || sourcePreview.width <= 1.0 || !m_state.hoveredStripIndex ||
+        *m_state.hoveredStripIndex >= m_state.stripEntries.size())
+        return DRAG_PREVIEW_SCALE;
+
+    const auto& entry = m_state.stripEntries[*m_state.hoveredStripIndex];
+    if (entry.monitor != dragged.targetMonitor || entry.newWorkspaceSlot)
+        return DRAG_PREVIEW_SCALE;
+
+    const Rect thumbnail = animatedWorkspaceStripRect(entry.rect, dragged.targetMonitor);
+    if (thumbnail.width <= 1.0)
+        return DRAG_PREVIEW_SCALE;
+
+    return std::clamp(std::min(DRAG_PREVIEW_SCALE, thumbnail.width * DRAG_PREVIEW_STRIP_WIDTH_RATIO / sourcePreview.width), 0.05, 1.0);
+}
+
 double OverviewController::draggedPreviewScale() const {
     if (!m_draggedWindowIndex || m_draggedWindowStart == std::chrono::steady_clock::time_point{})
         return m_draggedWindowTargetScale;
@@ -8445,7 +8456,7 @@ double OverviewController::draggedPreviewScale() const {
     const double t = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
                                static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(DRAG_PREVIEW_SHRINK_DURATION).count()));
     const double eased = t * t * (3.0 - 2.0 * t);
-    return 1.0 + (m_draggedWindowTargetScale - 1.0) * eased;
+    return m_draggedWindowScaleFrom + (m_draggedWindowTargetScale - m_draggedWindowScaleFrom) * eased;
 }
 
 double OverviewController::dropAnimationProgress() const {
@@ -10841,6 +10852,12 @@ void OverviewController::updateHoveredFromPointer(bool syncSelection, bool syncR
     }
 
     if (draggingWindow) {
+        const double nextScale = draggedPreviewTargetScaleForHover();
+        if (std::abs(nextScale - m_draggedWindowTargetScale) > 0.0001) {
+            m_draggedWindowScaleFrom = draggedPreviewScale();
+            m_draggedWindowTargetScale = nextScale;
+            m_draggedWindowStart = now;
+        }
         if (m_dragDimStripIndex != m_state.hoveredStripIndex) {
             m_dragDimStripIndex = m_state.hoveredStripIndex;
             m_dragDimStart = m_dragDimStripIndex ? now : std::chrono::steady_clock::time_point{};
@@ -11456,6 +11473,7 @@ void OverviewController::clearStripWindowDragState() {
     m_dragDimStart = {};
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
+    m_draggedWindowScaleFrom = 1.0;
     m_draggedWindowTargetScale = DRAG_PREVIEW_SCALE;
     m_draggedWindowStart = {};
 }
