@@ -240,6 +240,7 @@ class OverviewController {
         Rect                                  from;
         Rect                                  to;
         double                                initialDim = 1.0;
+        bool                                  returning = false;
         std::chrono::steady_clock::time_point start = {};
     };
 
@@ -931,6 +932,7 @@ class OverviewController {
     mutable std::optional<SpatialPickCache> m_spatialPickCache;
     Vector2D                  m_pressedWindowPointer;
     Vector2D                  m_draggedWindowPointerOffset;
+    double                    m_draggedWindowTargetScale = 0.65;
     std::chrono::steady_clock::time_point m_draggedWindowStart = {};
     Vector2D                  m_hoverSelectionAnchorPointer;
     bool                      m_hoverSelectionAnchorValid = false;

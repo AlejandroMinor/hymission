@@ -197,7 +197,9 @@ constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr double SELECTED_WINDOW_LAYOUT_EMPHASIS = 1.18;
 constexpr double HOVER_SELECTION_RETARGET_DISTANCE = 18.0;
 constexpr double DRAG_PREVIEW_SCALE = 0.65;
+constexpr double DRAG_PREVIEW_STRIP_WIDTH_RATIO = 0.80;
 constexpr auto   DRAG_PREVIEW_SHRINK_DURATION = std::chrono::milliseconds(120);
+constexpr auto   DRAG_RETURN_ANIMATION_DURATION = std::chrono::milliseconds(180);
 constexpr auto   STRIP_DRAG_DIM_DURATION = std::chrono::milliseconds(110);
 constexpr auto   STRIP_DROP_ANIMATION_DURATION = std::chrono::milliseconds(220);
 constexpr double STRIP_DRAG_DIM_ALPHA = 0.28;
@@ -2791,7 +2793,7 @@ void OverviewController::renderStage(eRenderStage stage) {
             scheduleWorkspaceStripSnapshotRefresh();
         }
         if ((isAnimating() || m_state.phase == Phase::ClosingSettle || m_state.relayoutActive || m_postOpenRefreshFrames > 0 || m_dropAnimation ||
-             (m_draggedWindowIndex && draggedPreviewScale() > DRAG_PREVIEW_SCALE + 0.001)) &&
+             (m_draggedWindowIndex && draggedPreviewScale() > m_draggedWindowTargetScale + 0.001)) &&
             !m_deactivatePending) {
             damageOwnedMonitors();
             if (m_postOpenRefreshFrames > 0)
@@ -2836,6 +2838,18 @@ void OverviewController::handleMouseMove() {
                 m_dropAnimation.reset();
                 m_draggedWindowIndex = m_pressedWindowIndex;
                 m_draggedWindowPointerOffset = Vector2D{pointer.x - rect.x, pointer.y - rect.y};
+                m_draggedWindowTargetScale = DRAG_PREVIEW_SCALE;
+                double stripThumbnailWidth = std::numeric_limits<double>::max();
+                for (const auto& entry : m_state.stripEntries) {
+                    if (entry.monitor != managed.targetMonitor || entry.newWorkspaceSlot || entry.rect.width <= 1.0)
+                        continue;
+                    stripThumbnailWidth = std::min(stripThumbnailWidth, entry.rect.width);
+                }
+                if (stripThumbnailWidth != std::numeric_limits<double>::max() && rect.width > 1.0) {
+                    m_draggedWindowTargetScale = std::min(m_draggedWindowTargetScale,
+                                                          stripThumbnailWidth * DRAG_PREVIEW_STRIP_WIDTH_RATIO / rect.width);
+                }
+                m_draggedWindowTargetScale = std::clamp(m_draggedWindowTargetScale, 0.05, 1.0);
                 m_draggedWindowStart = std::chrono::steady_clock::now();
                 m_dragDimStripIndex = m_state.hoveredStripIndex;
                 m_dragDimStart = m_dragDimStripIndex ? m_draggedWindowStart : std::chrono::steady_clock::time_point{};
@@ -2951,6 +2965,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const auto  hoveredStripIndex = m_state.hoveredStripIndex;
             const auto  thumbnailDropIndex = hitTestThumbnailDropTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y, draggedIndex);
             const auto  draggedPreview = window ? draggedPreviewRectFor(window) : std::optional<Rect>{};
+            const Rect  dragReturnTarget = currentPreviewRect(m_state.windows[draggedIndex]);
             const auto  stripDropTarget = window && hoveredStripIndex ? draggedPreviewTargetFor(window) : std::optional<DragPreviewTarget>{};
             const auto  dropTexture = m_draggedWindowTexture;
             const auto  dropMonitor = m_state.windows[draggedIndex].targetMonitor;
@@ -2999,6 +3014,18 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                 if (Animation::mgr())
                     Animation::mgr()->frameTick();
                 rebuildVisibleState(window, true);
+            } else if (window && draggedPreview && dropMonitor && dragReturnTarget.width > 0.0 && dragReturnTarget.height > 0.0) {
+                m_dropAnimation = DropAnimation{
+                    .window = window,
+                    .monitor = dropMonitor,
+                    .texture = dropTexture,
+                    .workspaceId = window->m_workspace ? window->m_workspace->m_id : WORKSPACE_INVALID,
+                    .from = *draggedPreview,
+                    .to = dragReturnTarget,
+                    .initialDim = 0.0,
+                    .returning = true,
+                    .start = std::chrono::steady_clock::now(),
+                };
             }
 
             damageOwnedMonitors();
@@ -7649,6 +7676,11 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
         if (const auto draggedPreview = draggedPreviewRectFor(window); draggedPreview)
             current = *draggedPreview;
+        else if (m_dropAnimation && m_dropAnimation->returning && m_dropAnimation->window == window) {
+            const double raw = dropAnimationProgress();
+            const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
+            current = lerpRect(m_dropAnimation->from, m_dropAnimation->to, motion);
+        }
     }
     const Rect   actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
@@ -8379,13 +8411,13 @@ std::optional<Rect> OverviewController::draggedPreviewRectFor(const PHLWINDOW& w
 
 double OverviewController::draggedPreviewScale() const {
     if (!m_draggedWindowIndex || m_draggedWindowStart == std::chrono::steady_clock::time_point{})
-        return DRAG_PREVIEW_SCALE;
+        return m_draggedWindowTargetScale;
 
     const auto elapsed = std::chrono::steady_clock::now() - m_draggedWindowStart;
     const double t = clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
                                static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(DRAG_PREVIEW_SHRINK_DURATION).count()));
     const double eased = t * t * (3.0 - 2.0 * t);
-    return 1.0 + (DRAG_PREVIEW_SCALE - 1.0) * eased;
+    return 1.0 + (m_draggedWindowTargetScale - 1.0) * eased;
 }
 
 double OverviewController::dropAnimationProgress() const {
@@ -8393,19 +8425,21 @@ double OverviewController::dropAnimationProgress() const {
         return 1.0;
 
     const auto elapsed = std::chrono::steady_clock::now() - m_dropAnimation->start;
+    const auto duration = m_dropAnimation->returning ? DRAG_RETURN_ANIMATION_DURATION : STRIP_DROP_ANIMATION_DURATION;
     return clampUnit(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count()) /
-                     static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(STRIP_DROP_ANIMATION_DURATION).count()));
+                     static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(duration).count()));
 }
 
 bool OverviewController::dropAnimationMatchesEntry(const WorkspaceStripEntry& entry) const {
-    return m_dropAnimation && entry.monitor && m_dropAnimation->monitor == entry.monitor && entry.workspaceId == m_dropAnimation->workspaceId;
+    return m_dropAnimation && !m_dropAnimation->returning && entry.monitor && m_dropAnimation->monitor == entry.monitor &&
+        entry.workspaceId == m_dropAnimation->workspaceId;
 }
 
 void OverviewController::updateDropAnimation() {
     if (!m_dropAnimation)
         return;
 
-    if (!m_dropAnimation->window || !m_dropAnimation->texture || dropAnimationProgress() >= 1.0)
+    if (!m_dropAnimation->window || (!m_dropAnimation->returning && !m_dropAnimation->texture) || dropAnimationProgress() >= 1.0)
         m_dropAnimation.reset();
 }
 
@@ -11394,6 +11428,7 @@ void OverviewController::clearStripWindowDragState() {
     m_dragDimStart = {};
     m_pressedWindowPointer = {};
     m_draggedWindowPointerOffset = {};
+    m_draggedWindowTargetScale = DRAG_PREVIEW_SCALE;
     m_draggedWindowStart = {};
 }
 
@@ -11828,10 +11863,12 @@ void OverviewController::renderDraggedWindowPreview() const {
 
         const double raw = dropAnimationProgress();
         const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
-        const double blend = raw * raw * (3.0 - 2.0 * raw);
         preview = lerpRect(m_dropAnimation->from, m_dropAnimation->to, motion);
-        alpha = 1.0 - blend;
-        if (m_dropAnimation->from.width > 0.0 && m_dropAnimation->from.height > 0.0) {
+        if (!m_dropAnimation->returning) {
+            const double blend = raw * raw * (3.0 - 2.0 * raw);
+            alpha = 1.0 - blend;
+        }
+        if (!m_dropAnimation->returning && m_dropAnimation->from.width > 0.0 && m_dropAnimation->from.height > 0.0) {
             decorationScale = std::max(0.0, std::min(preview.width / m_dropAnimation->from.width,
                                                      preview.height / m_dropAnimation->from.height));
         }
