@@ -2966,6 +2966,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
             const auto  thumbnailDropIndex = hitTestThumbnailDropTarget(pointerBeforeUpdate.x, pointerBeforeUpdate.y, draggedIndex);
             const auto  draggedPreview = window ? draggedPreviewRectFor(window) : std::optional<Rect>{};
             const Rect  dragReturnTarget = currentPreviewRect(m_state.windows[draggedIndex]);
+            const double dropDecorationScale = draggedPreviewScale();
             const auto  stripDropTarget = window && hoveredStripIndex ? draggedPreviewTargetFor(window) : std::optional<DragPreviewTarget>{};
             const auto  dropTexture = m_draggedWindowTexture;
             const auto  dropMonitor = m_state.windows[draggedIndex].targetMonitor;
@@ -3005,6 +3006,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                         .from = *draggedPreview,
                         .to = stripDropTarget->preview,
                         .initialDim = dropInitialDim,
+                        .decorationScale = dropDecorationScale,
                         .start = std::chrono::steady_clock::now(),
                     };
                 }
@@ -3023,6 +3025,7 @@ bool OverviewController::handleMouseButton(const IPointer::SButtonEvent& event) 
                     .from = *draggedPreview,
                     .to = dragReturnTarget,
                     .initialDim = 0.0,
+                    .decorationScale = dropDecorationScale,
                     .returning = true,
                     .start = std::chrono::steady_clock::now(),
                 };
@@ -3462,15 +3465,24 @@ void OverviewController::renderOverviewBorderForWindow(const PHLWINDOW& window, 
     if (!window || !monitor || !g_pHyprRenderer)
         return;
 
-    const int borderSize = static_cast<int>(overviewBorderOutsetForWindow(window));
-    if (borderSize <= 0)
-        return;
-
     const auto transform = windowTransformFor(window, monitor);
     if (!transform)
         return;
 
-    const Rect previewRect = transform->targetGlobal;
+    renderOverviewBorderForRect(window, monitor, transform->targetGlobal, alpha, 1.0, false);
+}
+
+void OverviewController::renderOverviewBorderForRect(const PHLWINDOW& window, const PHLMONITOR& monitor, const Rect& previewRect, float alpha,
+                                                     double decorationScale, bool immediate) const {
+    if (!window || !monitor || !g_pHyprRenderer || (immediate && !g_pHyprOpenGL))
+        return;
+
+    decorationScale = std::max(0.0, decorationScale);
+    const double borderSizeLogical = overviewBorderOutsetForWindow(window) * decorationScale;
+    const int borderSize = static_cast<int>(std::lround(borderSizeLogical));
+    if (borderSize <= 0)
+        return;
+
     if (previewRect.width < 1.0 || previewRect.height < 1.0)
         return;
 
@@ -3481,13 +3493,13 @@ void OverviewController::renderOverviewBorderForWindow(const PHLWINDOW& window, 
     const double renderScale = renderScaleForMonitor(monitor);
     const double roundingScale = previewDecorationRoundingScale(monitor);
     const double roundingPower = window->roundingPower();
-    const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
-    const double innerRoundingLogical = std::max(0.0, static_cast<double>(window->rounding()) * roundingScale);
+    const double correctionOffset = borderSizeLogical * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
+    const double innerRoundingLogical = std::max(0.0, static_cast<double>(window->rounding()) * roundingScale * decorationScale);
     const int    innerRounding =
         std::min(static_cast<int>(std::floor(std::min(borderBox.width, borderBox.height) * 0.5)),
                  std::max(0, static_cast<int>(std::lround(innerRoundingLogical * renderScale))));
     const int outerRound =
-        std::max(0, static_cast<int>(std::lround((innerRoundingLogical + borderSize - correctionOffset) * renderScale)));
+        std::max(0, static_cast<int>(std::lround((innerRoundingLogical + borderSizeLogical - correctionOffset) * renderScale)));
 
     auto       grad = window->m_realBorderColor;
     auto       previousGrad = window->m_realBorderColorPrevious;
@@ -3512,13 +3524,41 @@ void OverviewController::renderOverviewBorderForWindow(const PHLWINDOW& window, 
     data.roundingPower = static_cast<float>(roundingPower);
     data.window = window;
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+    if (!immediate) {
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+        return;
+    }
+
+    const Render::GL::CHyprOpenGLImpl::SBorderRenderData renderData{
+        .round = data.round,
+        .roundingPower = data.roundingPower,
+        .borderSize = data.borderSize,
+        .a = data.a,
+        .outerRound = data.outerRound,
+    };
+    if (data.hasGrad2)
+        g_pHyprOpenGL->renderBorder(data.box, data.grad1, data.grad2, data.lerp, renderData);
+    else
+        g_pHyprOpenGL->renderBorder(data.box, data.grad1, renderData);
 }
 
 void OverviewController::renderOverviewShadowForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const {
     if (!window || !monitor || !g_pHyprRenderer)
         return;
 
+    const auto transform = windowTransformFor(window, monitor);
+    if (!transform)
+        return;
+
+    renderOverviewShadowForRect(window, monitor, transform->targetGlobal, alpha, 1.0, false);
+}
+
+void OverviewController::renderOverviewShadowForRect(const PHLWINDOW& window, const PHLMONITOR& monitor, const Rect& previewRect, float alpha,
+                                                     double decorationScale, bool immediate) const {
+    if (!window || !monitor || !g_pHyprRenderer || (immediate && !g_pHyprOpenGL))
+        return;
+
+    decorationScale = std::max(0.0, decorationScale);
     if (!windowDecorationsEnabled())
         return;
 
@@ -3538,26 +3578,22 @@ void OverviewController::renderOverviewShadowForWindow(const PHLWINDOW& window, 
     if (shadowColor == CHyprColor(0, 0, 0, 0))
         return;
 
-    const auto transform = windowTransformFor(window, monitor);
-    if (!transform)
-        return;
-
     static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
     static auto PSHADOWSCALE = CConfigValue<Config::FLOAT>("decoration:shadow:scale");
     static auto PSHADOWOFFSET = CConfigValue<Config::VEC2>("decoration:shadow:offset");
 
-    const int shadowRange = std::max(0, static_cast<int>(*PSHADOWSIZE));
-    if (shadowRange <= 0)
+    const double shadowRange = std::max(0.0, static_cast<double>(*PSHADOWSIZE) * decorationScale);
+    if (shadowRange <= 0.0)
         return;
 
-    const int    borderSize = std::max(0, window->getRealBorderSize());
-    const Rect   shadowRect = inflateRect(transform->targetGlobal, static_cast<double>(borderSize + shadowRange), static_cast<double>(borderSize + shadowRange));
+    const double borderSize = std::max(0.0, static_cast<double>(window->getRealBorderSize()) * decorationScale);
+    const Rect   shadowRect = inflateRect(previewRect, borderSize + shadowRange, borderSize + shadowRange);
     CBox         shadowBox = toBox(rectToMonitorRenderLocal(shadowRect, monitor)).round();
     const double renderScale = renderScaleForMonitor(monitor);
     const float  shadowScale = std::clamp(static_cast<float>(*PSHADOWSCALE), 0.0F, 1.0F);
     shadowBox.scaleFromCenter(shadowScale);
     const auto shadowOffset = *PSHADOWOFFSET;
-    shadowBox.translate(Vector2D{shadowOffset.x * renderScale, shadowOffset.y * renderScale});
+    shadowBox.translate(Vector2D{shadowOffset.x * decorationScale * renderScale, shadowOffset.y * decorationScale * renderScale});
 
     if (shadowBox.width < 1 || shadowBox.height < 1)
         return;
@@ -3566,11 +3602,15 @@ void OverviewController::renderOverviewShadowForWindow(const PHLWINDOW& window, 
     const double roundingPower = window->roundingPower();
     const double correctionOffset = borderSize * (M_SQRT2 - 1.0) * std::max(2.0 - roundingPower, 0.0);
     const int    shadowRound = std::max(
-        0, static_cast<int>(std::lround((static_cast<double>(window->rounding()) * roundingScale + borderSize - correctionOffset) * renderScale)));
-    const int renderRange = std::max(1, static_cast<int>(std::lround(static_cast<double>(shadowRange) * renderScale)));
+        0, static_cast<int>(std::lround((static_cast<double>(window->rounding()) * roundingScale * decorationScale + borderSize - correctionOffset) * renderScale)));
+    const int renderRange = std::max(1, static_cast<int>(std::lround(shadowRange * renderScale)));
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<OverviewShadowPassElement>(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor,
-                                                                            managedPreviewAlphaFor(window, alpha)));
+    const float previewAlpha = managedPreviewAlphaFor(window, alpha);
+    if (immediate)
+        g_pHyprOpenGL->renderRoundedShadow(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha);
+    else
+        g_pHyprRenderer->m_renderPass.add(
+            makeUnique<OverviewShadowPassElement>(shadowBox, shadowRound, static_cast<float>(roundingPower), renderRange, shadowColor, previewAlpha));
 }
 
 void OverviewController::borderDrawHook(void* borderDecorationThisptr, const PHLMONITOR& monitor, const float& alpha) {
@@ -4298,10 +4338,6 @@ double OverviewController::focusSelectedThickness() const {
     return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:focus_selected_thickness", OUTLINE_THICKNESS));
 }
 
-double OverviewController::dragOutlineThickness() const {
-    return std::max(0.0, getConfigFloat(m_handle, "plugin:hymission:drag_outline_thickness", 2.0));
-}
-
 bool OverviewController::backdropBlurEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:backdrop_blur", 0) != 0;
 }
@@ -4356,14 +4392,6 @@ CHyprColor OverviewController::focusSelectedColor() const {
 
 CHyprColor OverviewController::focusTitleColor() const {
     return getConfigColor(m_handle, "plugin:hymission:focus_title_color", 0xffffffff);
-}
-
-CHyprColor OverviewController::dragPreviewColor() const {
-    return getConfigColor(m_handle, "plugin:hymission:drag_preview_color", 0x4729333d);
-}
-
-CHyprColor OverviewController::dragOutlineColor() const {
-    return getConfigColor(m_handle, "plugin:hymission:drag_outline_color", 0xd1f2f7ff);
 }
 
 CHyprColor OverviewController::closeButtonColor() const {
@@ -11856,6 +11884,7 @@ void OverviewController::renderDraggedWindowPreview() const {
         monitor = dragged.targetMonitor;
         texture = m_draggedWindowTexture;
         preview = draggedPreviewRectFor(window).value_or(Rect{});
+        decorationScale = draggedPreviewScale();
     } else if (m_dropAnimation && m_dropAnimation->window && m_dropAnimation->monitor && m_dropAnimation->texture) {
         window = m_dropAnimation->window;
         monitor = m_dropAnimation->monitor;
@@ -11864,13 +11893,16 @@ void OverviewController::renderDraggedWindowPreview() const {
         const double raw = dropAnimationProgress();
         const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
         preview = lerpRect(m_dropAnimation->from, m_dropAnimation->to, motion);
+        decorationScale = m_dropAnimation->decorationScale;
         if (!m_dropAnimation->returning) {
             const double blend = raw * raw * (3.0 - 2.0 * raw);
             alpha = 1.0 - blend;
-        }
-        if (!m_dropAnimation->returning && m_dropAnimation->from.width > 0.0 && m_dropAnimation->from.height > 0.0) {
-            decorationScale = std::max(0.0, std::min(preview.width / m_dropAnimation->from.width,
-                                                     preview.height / m_dropAnimation->from.height));
+            if (m_dropAnimation->from.width > 0.0 && m_dropAnimation->from.height > 0.0) {
+                decorationScale *= std::max(0.0, std::min(preview.width / m_dropAnimation->from.width,
+                                                         preview.height / m_dropAnimation->from.height));
+            }
+        } else {
+            decorationScale += (1.0 - decorationScale) * motion;
         }
     }
 
@@ -11881,36 +11913,15 @@ void OverviewController::renderDraggedWindowPreview() const {
     if (!renderMonitor || renderMonitor != monitor)
         return;
 
+    renderOverviewShadowForRect(window, renderMonitor, preview, static_cast<float>(alpha), decorationScale, true);
+
     const Rect local = rectToMonitorRenderLocal(preview, renderMonitor);
     const double renderScale = renderScaleForMonitor(renderMonitor);
-    const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * renderScale * decorationScale)));
+    const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * decorationScale * renderScale)));
     const float roundingPower = static_cast<float>(window->roundingPower());
     g_pHyprOpenGL->renderTexture(texture, toBox(local), {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
 
-    const int borderSize = std::max(0, static_cast<int>(std::lround(overviewBorderOutsetForWindow(window) * renderScale * decorationScale)));
-    if (borderSize > 0) {
-        auto grad = window->m_realBorderColor;
-        auto previousGrad = window->m_realBorderColorPrevious;
-        const bool animated = window->m_borderFadeAnimationProgress && window->m_borderFadeAnimationProgress->isBeingAnimated();
-        if (window->m_borderAngleAnimationProgress && window->m_borderAngleAnimationProgress->enabled()) {
-            grad.m_angle += window->m_borderAngleAnimationProgress->value() * M_PI * 2.0;
-            grad.m_angle = normalizeAngleRad(grad.m_angle);
-            if (animated)
-                previousGrad.m_angle = grad.m_angle;
-        }
-
-        Render::GL::CHyprOpenGLImpl::SBorderRenderData borderData{
-            .round = rounding,
-            .roundingPower = roundingPower,
-            .borderSize = borderSize,
-            .a = managedPreviewAlphaFor(window, static_cast<float>(alpha)),
-            .outerRound = rounding + borderSize,
-        };
-        if (animated)
-            g_pHyprOpenGL->renderBorder(toBox(local), previousGrad, grad, window->m_borderFadeAnimationProgress->value(), borderData);
-        else
-            g_pHyprOpenGL->renderBorder(toBox(local), grad, borderData);
-    }
+    renderOverviewBorderForRect(window, renderMonitor, preview, static_cast<float>(alpha), decorationScale, true);
 }
 
 void OverviewController::captureDraggedWindowTexture() {

@@ -364,7 +364,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     INT_CONF("close_button_inset", 0);
     FLOAT_CONF("focus_hover_thickness", 2.0F);
     FLOAT_CONF("focus_selected_thickness", 4.0F);
-    FLOAT_CONF("drag_outline_thickness", 2.0F);
     INT_CONF("backdrop_blur", 0);
     COLOR_CONF("backdrop_color", 0x00000000LL);
     COLOR_CONF("workspace_strip_background_color", 0x3d081224LL);
@@ -379,8 +378,6 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     COLOR_CONF("focus_hover_color", 0x8cf2f7ffLL);
     COLOR_CONF("focus_selected_color", 0xf23dc7ffLL);
     COLOR_CONF("focus_title_color", 0xffffffffLL);
-    COLOR_CONF("drag_preview_color", 0x4729333dLL);
-    COLOR_CONF("drag_outline_color", 0xd1f2f7ffLL);
     COLOR_CONF("close_button_color", 0xeb29292eLL);
     COLOR_CONF("close_button_hover_color", 0xf2f24d47LL);
     COLOR_CONF("close_button_glyph_color", 0xfaffffffLL);

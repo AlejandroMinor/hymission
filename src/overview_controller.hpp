@@ -240,6 +240,7 @@ class OverviewController {
         Rect                                  from;
         Rect                                  to;
         double                                initialDim = 1.0;
+        double                                decorationScale = 1.0;
         bool                                  returning = false;
         std::chrono::steady_clock::time_point start = {};
     };
@@ -490,7 +491,6 @@ class OverviewController {
     [[nodiscard]] bool         pickLabelsDirectActivateEnabled() const;
     [[nodiscard]] double       focusHoverThickness() const;
     [[nodiscard]] double       focusSelectedThickness() const;
-    [[nodiscard]] double       dragOutlineThickness() const;
     [[nodiscard]] bool         backdropBlurEnabled() const;
     [[nodiscard]] CHyprColor   backdropColor() const;
     [[nodiscard]] CHyprColor   workspaceStripBackgroundColor() const;
@@ -505,8 +505,6 @@ class OverviewController {
     [[nodiscard]] CHyprColor   focusHoverColor() const;
     [[nodiscard]] CHyprColor   focusSelectedColor() const;
     [[nodiscard]] CHyprColor   focusTitleColor() const;
-    [[nodiscard]] CHyprColor   dragPreviewColor() const;
-    [[nodiscard]] CHyprColor   dragOutlineColor() const;
     [[nodiscard]] CHyprColor   closeButtonColor() const;
     [[nodiscard]] CHyprColor   closeButtonHoverColor() const;
     [[nodiscard]] CHyprColor   closeButtonGlyphColor() const;
@@ -638,6 +636,10 @@ class OverviewController {
     [[nodiscard]] SDispatchResult startOverviewWorkspaceTransitionForDispatcher(const std::string& args, bool currentMonitorOnly);
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] double                        previewDecorationRoundingScale(const PHLMONITOR& monitor) const;
+    void                                        renderOverviewBorderForRect(const PHLWINDOW& window, const PHLMONITOR& monitor, const Rect& previewRect, float alpha,
+                                                                            double decorationScale, bool immediate) const;
+    void                                        renderOverviewShadowForRect(const PHLWINDOW& window, const PHLMONITOR& monitor, const Rect& previewRect, float alpha,
+                                                                            double decorationScale, bool immediate) const;
     void                                        renderOverviewBorderForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const;
     void                                        renderOverviewShadowForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, float alpha) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
