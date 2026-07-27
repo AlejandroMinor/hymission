@@ -11902,18 +11902,21 @@ void OverviewController::renderDraggedWindowPreview() const {
     Rect                 preview;
     double               alpha = 1.0;
     double               decorationScale = 1.0;
+    bool                 compositeSnapshot = false;
 
     if (m_draggedWindowIndex && *m_draggedWindowIndex < m_state.windows.size()) {
         const auto& dragged = m_state.windows[*m_draggedWindowIndex];
         window = dragged.window;
         monitor = dragged.targetMonitor;
         texture = m_draggedWindowTexture;
+        compositeSnapshot = static_cast<bool>(m_draggedWindowFramebuffer);
         preview = draggedPreviewRectFor(window).value_or(Rect{});
         decorationScale = draggedPreviewScale();
     } else if (m_dropAnimation && m_dropAnimation->window && m_dropAnimation->monitor && m_dropAnimation->texture) {
         window = m_dropAnimation->window;
         monitor = m_dropAnimation->monitor;
         texture = m_dropAnimation->texture;
+        compositeSnapshot = static_cast<bool>(m_dropAnimation->framebuffer);
 
         const double raw = dropAnimationProgress();
         const double motion = 1.0 - std::pow(1.0 - raw, 3.0);
@@ -11944,6 +11947,16 @@ void OverviewController::renderDraggedWindowPreview() const {
     const double renderScale = renderScaleForMonitor(renderMonitor);
     const int rounding = std::max(0, static_cast<int>(std::lround(static_cast<double>(window->rounding()) * decorationScale * renderScale)));
     const float roundingPower = static_cast<float>(window->roundingPower());
+    static auto PBLURENABLED = CConfigValue<Config::INTEGER>("decoration:blur:enabled");
+    const auto  windowSurface = window->wlSurface();
+    const bool  backgroundEffectAllowsBlur = !windowSurface || !windowSurface->m_hasBackgroundEffect || !windowSurface->m_blurRegion.empty();
+    const bool  shouldBlurComposite =
+        compositeSnapshot && *PBLURENABLED && !window->m_ruleApplicator->noBlur().valueOrDefault() &&
+        !window->m_ruleApplicator->RGBX().valueOrDefault() && !window->opaque() && backgroundEffectAllowsBlur;
+    if (shouldBlurComposite) {
+        g_pHyprOpenGL->renderRect(toBox(local), CHyprColor{0.0, 0.0, 0.0, 0.0},
+                                  {.round = rounding, .roundingPower = roundingPower, .blur = true, .blurA = static_cast<float>(alpha)});
+    }
     g_pHyprOpenGL->renderTexture(texture, toBox(local), {.a = static_cast<float>(alpha), .round = rounding, .roundingPower = roundingPower});
 
     renderOverviewBorderForRect(window, renderMonitor, preview, static_cast<float>(alpha), decorationScale, true);
@@ -11984,19 +11997,60 @@ void OverviewController::captureDraggedWindowTexture() {
 
     // A window's top-level wl_surface is not necessarily its visible content.
     // Firefox/Zen, for example, can place the browser image in child surfaces.
-    // Ask Hyprland to render the complete surface tree at its native geometry,
-    // bypassing the overview transforms while the snapshot is built. Applying
-    // those transforms inside makeSnapshotFB() would transform child surfaces
-    // once during capture and then scale the result again during the drag.
-    // Keeping the cropped framebuffer alive also keeps its texture valid
-    // throughout the drag and the optional drop/return animation.
+    // Render the complete tree in standalone mode so window alpha and blur are
+    // not baked into the texture. Blur is restored behind the texture at its
+    // dragged position, avoiding black bands in transparent browser chrome.
+    using RenderWindowFn = void (*)(Render::IHyprRenderer*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, Render::eRenderPassMode, bool, bool);
+    static RenderWindowFn renderWindowFn = nullptr;
+    static bool           renderWindowResolved = false;
+    if (!renderWindowResolved) {
+        renderWindowResolved = true;
+        renderWindowFn = reinterpret_cast<RenderWindowFn>(findFunction("renderWindow", "IHyprRenderer::renderWindow"));
+        if (!renderWindowFn)
+            debugLog("[hymission] failed to resolve IHyprRenderer::renderWindow for dragged window snapshot");
+    }
+    if (!renderWindowFn)
+        return;
+
+    auto fullSnapshot = createFramebuffer("hymission complete dragged window snapshot");
+    if (!fullSnapshot ||
+        !fullSnapshot->alloc(std::max(1, static_cast<int>(std::lround(dragged.targetMonitor->m_pixelSize.x))),
+                             std::max(1, static_cast<int>(std::lround(dragged.targetMonitor->m_pixelSize.y))))) {
+        debugLog("[hymission] unable to allocate complete dragged window snapshot");
+        return;
+    }
+    fullSnapshot->setImageDescription(dragged.targetMonitor->workBufferImageDescription());
+    setFramebufferLinearFiltering(*fullSnapshot);
+
     g_pHyprOpenGL->makeEGLCurrent();
     const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
+    const bool previousBlockScreenShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
     ++m_dragSnapshotRenderDepth;
-    const auto fullSnapshot = g_pHyprRenderer->makeSnapshotFB(dragged.window);
+
+    CRegion fakeDamage{0, 0, static_cast<int>(std::lround(dragged.targetMonitor->m_transformedSize.x)),
+                       static_cast<int>(std::lround(dragged.targetMonitor->m_transformedSize.y))};
+    if (!g_pHyprRenderer->beginFullFakeRender(dragged.targetMonitor, fakeDamage, fullSnapshot)) {
+        --m_dragSnapshotRenderDepth;
+        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
+        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
+        g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+        debugLog("[hymission] unable to begin complete dragged window snapshot");
+        return;
+    }
+
+    g_pHyprRenderer->m_bRenderingSnapshot = true;
+    g_pHyprRenderer->draw(CClearPassElement::SClearData{.color = CHyprColor{0.0, 0.0, 0.0, 0.0}}, fakeDamage);
+    g_pHyprRenderer->startRenderPass();
+    renderWindowFn(g_pHyprRenderer.get(), dragged.window, dragged.targetMonitor, Time::steadyNow(), false, Render::RENDER_PASS_ALL, false, true);
+    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    g_pHyprRenderer->endRender();
+
     --m_dragSnapshotRenderDepth;
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
+    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockScreenShader;
+    g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
     if (!fullSnapshot || !fullSnapshot->isAllocated() || !fullSnapshot->getTexture()) {
         debugLog("[hymission] unable to capture complete dragged window snapshot");
         return;
