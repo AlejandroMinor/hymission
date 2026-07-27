@@ -403,16 +403,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
     }
 
-    const auto registerDispatcher = [&](const char* name, auto handler) {
-        if (!HyprlandAPI::addDispatcherV2(g_pluginHandle, name, handler)) {
-            HyprlandAPI::addNotification(g_pluginHandle, std::string("[hymission] failed to register dispatcher ") + name, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
-        }
-    };
+    // Lua configs call the plugin-owned functions registered below directly.
+    // Hyprland builds without the legacy config parser keep addDispatcherV2 for
+    // ABI compatibility but make it fail, so registering these compatibility
+    // dispatchers in Lua mode only produces false startup errors.
+    if (Config::mgr() && Config::mgr()->type() != Config::CONFIG_LUA) {
+        const auto registerDispatcher = [&](const char* name, auto handler) {
+            if (!HyprlandAPI::addDispatcherV2(g_pluginHandle, name, handler)) {
+                HyprlandAPI::addNotification(g_pluginHandle, std::string("[hymission] failed to register dispatcher ") + name, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+            }
+        };
 
-    registerDispatcher("hymission:toggle", dispatchToggle);
-    registerDispatcher("hymission:open", dispatchOpen);
-    registerDispatcher("hymission:close", dispatchClose);
-    registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
+        registerDispatcher("hymission:toggle", dispatchToggle);
+        registerDispatcher("hymission:open", dispatchOpen);
+        registerDispatcher("hymission:close", dispatchClose);
+        registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
+    }
 
     g_overviewStateCommand = HyprlandAPI::registerHyprCtlCommand(g_pluginHandle, SHyprCtlCommand{
         .name = "hymission-overview-state",
