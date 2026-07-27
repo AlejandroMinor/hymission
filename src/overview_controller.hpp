@@ -913,6 +913,7 @@ class OverviewController {
     bool                     m_toggleSwitchSessionActive = false;
     bool                     m_toggleSwitchReleaseArmed = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
+    std::size_t              m_dragSnapshotRenderDepth = 0;
     std::size_t              m_externalRawWindowRenderDepth = 0;
     std::string              m_externalRawWindowRenderToken;
     std::string              m_externalCaptureInputToken;

@@ -2707,7 +2707,7 @@ std::string OverviewController::handleRawWindowRenderCommand(const std::string& 
 }
 
 bool OverviewController::rawWindowRenderActive() const {
-    return m_externalRawWindowRenderDepth > 0;
+    return m_dragSnapshotRenderDepth > 0 || m_externalRawWindowRenderDepth > 0;
 }
 
 std::string OverviewController::handleCaptureInputCommand(const std::string& args) {
@@ -11944,27 +11944,31 @@ void OverviewController::captureDraggedWindowTexture() {
     if (!dragged.window || !dragged.targetMonitor || m_stripSnapshotRenderDepth > 0)
         return;
 
-    const Rect preview = draggedPreviewRectFor(dragged.window).value_or(Rect{});
-    if (preview.width <= 1.0 || preview.height <= 1.0)
+    const Rect actual = surfaceRenderGlobalRectForWindow(dragged.window);
+    if (actual.width <= 1.0 || actual.height <= 1.0)
         return;
 
     // A window's top-level wl_surface is not necessarily its visible content.
     // Firefox/Zen, for example, can place the browser image in child surfaces.
-    // Ask Hyprland to render the complete surface tree, then crop the monitor-
-    // sized snapshot down to the window preview that was visible at grab time.
-    // Keeping the framebuffer alive also keeps its texture valid throughout
-    // the drag and the optional drop/return animation.
+    // Ask Hyprland to render the complete surface tree at its native geometry,
+    // bypassing the overview transforms while the snapshot is built. Applying
+    // those transforms inside makeSnapshotFB() would transform child surfaces
+    // once during capture and then scale the result again during the drag.
+    // Keeping the cropped framebuffer alive also keeps its texture valid
+    // throughout the drag and the optional drop/return animation.
     g_pHyprOpenGL->makeEGLCurrent();
     const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    ++m_dragSnapshotRenderDepth;
     const auto fullSnapshot = g_pHyprRenderer->makeSnapshotFB(dragged.window);
+    --m_dragSnapshotRenderDepth;
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;
     if (!fullSnapshot || !fullSnapshot->isAllocated() || !fullSnapshot->getTexture()) {
         debugLog("[hymission] unable to capture complete dragged window snapshot");
         return;
     }
 
-    const Rect sourceRect = rectToMonitorRenderLocal(preview, dragged.targetMonitor);
+    const Rect sourceRect = rectToMonitorRenderLocal(actual, dragged.targetMonitor);
     const int  fbWidth = std::max(1, static_cast<int>(std::ceil(sourceRect.width)));
     const int  fbHeight = std::max(1, static_cast<int>(std::ceil(sourceRect.height)));
     auto       croppedSnapshot = createFramebuffer("hymission dragged window snapshot");
