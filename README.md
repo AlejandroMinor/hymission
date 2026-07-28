@@ -121,24 +121,37 @@ end)
 hl.bind("SUPER + M", hl.plugin.hymission.debug_current_layout)
 ```
 
-| Dispatcher | Description |
-| --- | --- |
-| `hymission:toggle` | Toggle overview. Supports `onlycurrentworkspace`, `forceall`, and the `reverse` switch-session direction modifier. |
-| `hymission:open` | Open overview. Supports `onlycurrentworkspace` and `forceall`. |
-| `hymission:close` | Close overview. |
-| `hymission:debug_current_layout` | Compute the current layout and show a notification summary without entering overview. |
+Lua configuration should normally call the native plugin functions shown below. The
+colon-form names are the corresponding legacy dispatchers for non-Lua
+configuration.
+
+| Lua function | Legacy dispatcher | Arguments | Behavior | Why it exists |
+| --- | --- | --- | --- | --- |
+| `hl.plugin.hymission.toggle(args?)` | `hymission:toggle` | Optional scope; optional `reverse` | Opens overview while it is hidden and closes it while it is visible. In toggle switch mode, repeated calls cycle the selection instead of closing it. | Provides the normal one-key overview entry point. Its state-aware behavior also lets the same modifier-backed binding act as an Alt-Tab-style switcher. |
+| `hl.plugin.hymission.open(args?)` | `hymission:open` | Optional scope | Ensures overview is open. Calling it again with the same scope is a no-op; a different scope rebuilds the visible overview for that scope. | Gives gestures, scripts, and other stateful integrations a deterministic “show overview” operation without the risk that `toggle` closes an already-visible overview. |
+| `hl.plugin.hymission.close()` | `hymission:close` | None | Ensures overview is closed. Calling it while overview is already inactive or closing is a no-op. | Gives cancellation paths, scripts, and integrations a deterministic “leave overview” operation without the risk that `toggle` opens it. |
+| `hl.plugin.hymission.debug_current_layout()` | `hymission:debug_current_layout` | None | Computes the default-scope layout and shows a notification containing the preview count and up to three preview rectangles, without entering overview. | Started as the layout-prototype entry point and remains a low-risk way to verify window collection and layout geometry without taking over input or rendering overview. |
 
 ! Notice that you may only start the sapture by dispatcher, if you start hyprcapture-ui manually, it may not work correctly.
-##Scope arguments:
+#### Scope arguments
 
-- no argument: use the default config-driven collection scope
-- `onlycurrentworkspace`: show only the current regular workspace on the anchor monitor
-- `forceall`: show all regular workspaces across participating monitors and include currently visible special workspaces
-- `reverse`: only for `hymission:toggle`; cycle backward in toggle switch mode. It can be combined with a scope, for example `forceall,reverse`.
+| Argument | Accepted by | Meaning |
+| --- | --- | --- |
+| No argument | `toggle`, `open` | Use the collection scope selected by the plugin configuration. |
+| `onlycurrentworkspace` | `toggle`, `open` | Show only the current regular workspace on the anchor monitor. |
+| `forceall` | `toggle`, `open` | Show all regular workspaces across participating monitors and include currently visible special workspaces. |
+| `reverse` | `toggle` only | Move backward in toggle switch mode. It can be combined with one scope, for example `forceall,reverse`. Outside an active switch session it only affects the initial switch-mode selection. |
 
 ### Toggle Switch Mode
 
-`toggle_switch_mode` only affects `hymission:toggle`.
+Toggle switch mode only changes `hymission:toggle`; `open`, `close`, and gesture
+paths keep their normal behavior.
+
+| Option | Type | Default | Meaning | Why it exists |
+| --- | --- | --- | --- | --- |
+| `toggle_switch_mode` | bool | `0` | Turns a hidden-state `toggle` into the start of a switch session. While that session is visible, later `toggle` calls cycle through the existing overview order instead of closing overview. | A normal toggle can only alternate between open and closed. This mode adds a transient Alt-Tab / Super-Tab workflow without creating a separate task-switch list or changing explicit `open` and `close`. |
+| `switch_toggle_auto_next` | bool | `1` | Immediately advances one target when the first `toggle` opens a switch session. `reverse` changes that first step to the previous target. | Makes the first modifier-plus-Tab press select a different window, matching conventional task switchers; disable it when the session should initially stay on the current selection. |
+| `switch_release_key` | string | `Super_L` | Commits the current selection and closes the switch session when this keysym or `code:N` key is released. Release state is checked across active keyboards and by a polling fallback. | Lets the overview remain visible only while the modifier is held, and keeps release-to-commit reliable across focus changes, multiple keyboards, and missed per-window release events. |
 
 With a binding such as `hl.bind("SUPER + TAB", hl.plugin.hymission.toggle)` and:
 
@@ -154,12 +167,15 @@ hl.config({
 })
 ```
 
-- the first `SUPER+TAB` opens overview as a switch session
-- repeated `TAB` presses while `SUPER` stays held cycle to the next overview target
-- `SUPER+SHIFT+TAB` can use `hymission:toggle,reverse` to open the switch session and select the previous target, then cycle backward on repeated presses
-- releasing `SUPER` commits the current selection and exits overview
+| Input | Result |
+| --- | --- |
+| First `SUPER+TAB` | Opens overview as a switch session and, with `switch_toggle_auto_next = 1`, selects the next target. |
+| Repeated `TAB` while `SUPER` stays held | Cycles forward through the current overview order with wraparound. |
+| `SUPER+SHIFT+TAB` bound to `toggle("reverse")` | Opens and cycles the switch session backward. |
+| Release `SUPER` | Commits the current selection and exits overview. |
 
-`hymission:open`, `hymission:close`, and gesture paths keep their normal behavior. Toggle switch mode is meant for modifier-backed `hymission:toggle` bindings such as `ALT+TAB` / `SUPER+TAB`.
+This mode is intended for modifier-backed bindings such as `ALT+TAB` and
+`SUPER+TAB`.
 
 Hymission exposes native plugin functions under `hl.plugin.hymission`:
 
@@ -364,7 +380,7 @@ hl.config({
 | `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` movement outside overview. A value of `1.0` maps roughly one `gestures:workspace_swipe_distance` of finger travel to one viewport of scrolling-layout movement. Native `scrollMove` ignores this option. |
 | `niri_workspace_scale` | float | `1.0` | Niri mode strip thumbnail scale inside the configured strip thickness. Values are clamped to `0.05` - `1.0`; `1.0` uses the full strip cross-axis size. |
 | `niri_scrolling_preview_gap` | int | `0` | Extra gap in pixels between niri direct scrolling-layout preview cells along the scrolling axis. In horizontal scrolling layouts this is the horizontal preview gap. |
-| `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
+| `toggle_switch_mode` | bool | `0` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
 | `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
