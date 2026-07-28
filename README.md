@@ -273,6 +273,7 @@ Example:
 hl.config({
     plugin = {
         hymission = {
+            -- Layout: common geometry and sizing
             outer_padding_top = 92,
             outer_padding_right = 32,
             outer_padding_bottom = 32,
@@ -285,48 +286,71 @@ hl.config({
             max_preview_scale = 0.95,
             workspace_overview_max_preview_scale = 0.95,
             min_slot_scale = 0.10,
-            natural_scale_flex = 0.22,
+            one_workspace_per_row = 0,
+
+            -- Layout: engine selection and per-engine settings
             layout_engine = "grid",
+            layout_engine_forceall = "",
+            layout_engine_all = "",
+            layout_engine_onlycurrentworkspace = "",
             layout_scale_weight = 1.0,
             layout_space_weight = 0.10,
+            natural_scale_flex = 0.22,
 
-            expand_selected_window = 1,
-            hover_relayout_animation = "",
-            hover_relayout_duration = 140,
-            hover_relayout_curve = "ease_out_cubic",
-            hover_expand_scale = 1.18,
-            overview_focus_follows_mouse = 1,
+            -- Behavior: workspace scope and transitions
             multi_workspace_sort_recent_first = 1,
-            niri_mode = 0,
-            niri_scroll_pixels_per_delta = 1.0,
-            niri_workspace_scale = 1.0,
-            niri_scrolling_preview_gap = 0,
-            toggle_switch_mode = 1,
-            switch_toggle_auto_next = 1,
-            switch_release_key = "Super_L",
-            gesture_invert_vertical = 0,
-            one_workspace_per_row = 0,
             only_active_workspace = 0,
             only_active_monitor = 0,
             show_special = 0,
             workspace_change_keeps_overview = 1,
-            hide_hyprbars_during_overview = 0,
 
+            -- Behavior: hover and selection
+            expand_selected_window = 1,
+            hover_expand_scale = 1.18,
+            overview_focus_follows_mouse = 1,
+            show_focus_indicator = 0,
+
+            -- Animation: hover relayout
+            hover_relayout_animation = "",
+            hover_relayout_duration = 140,
+            hover_relayout_curve = "ease_out_cubic",
+
+            -- Behavior: toggle switch and gestures
+            toggle_switch_mode = 0,
+            switch_toggle_auto_next = 1,
+            switch_release_key = "Super_L",
+            gesture_invert_vertical = 0,
+
+            -- Niri mode
+            niri_mode = 0,
+            niri_scroll_pixels_per_delta = 1.0,
+            niri_workspace_scale = 1.0,
+            niri_scrolling_preview_gap = 0,
+
+            -- Workspace strip and bar
             workspace_strip_anchor = "left",
             workspace_strip_empty_mode = "existing",
             workspace_strip_thickness = 160,
             workspace_strip_gap = 24,
             hide_bar_when_strip = 1,
+            hide_hyprbars_during_overview = 0,
+            bar_single_mission_control = 0,
             hide_bar_animation = 1,
             hide_bar_animation_blur = 1,
             hide_bar_animation_move_multiplier = 0.8,
             hide_bar_animation_scale_divisor = 1.1,
             hide_bar_animation_alpha_end = 0,
-            bar_single_mission_control = 0,
-            show_focus_indicator = 0,
+
+            -- Label picking and window controls
             pick_labels_enabled = 0,
             pick_labels_mode = "sequential",
             pick_labels_direct_activate = 0,
+            window_decoration_enabled = 1,
+            close_button_enabled = 0,
+            close_button_size = 18,
+            close_button_inset = 0,
+
+            -- Appearance and color customization
             backdrop_blur = 0,
             backdrop_color = "rgba(00000000)",
             focus_hover_color = "rgba(f2f7ff8c)",
@@ -335,6 +359,7 @@ hl.config({
             focus_selected_thickness = 4,
             workspace_strip_inactive_tint_color = "rgba(00000000)",
 
+            -- Debug
             debug_logs = 0,
             debug_surface_logs = 0,
         },
@@ -342,12 +367,14 @@ hl.config({
 })
 ```
 
-### Layout options
+### Layout
+
+#### Common geometry and sizing
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `outer_padding` | int | `32` | Legacy fallback for all four edge paddings. |
-| `outer_padding_top` | int | `92` | Top padding for the overview content area. |
+| `outer_padding_top` | int | `32` | Top padding for the overview content area. |
 | `outer_padding_right` | int | `32` | Right padding for the overview content area. |
 | `outer_padding_bottom` | int | `32` | Bottom padding for the overview content area. |
 | `outer_padding_left` | int | `32` | Left padding for the overview content area. |
@@ -359,67 +386,144 @@ hl.config({
 | `max_preview_scale` | float | `0.95` | Maximum preview scale for all-workspace / multi-workspace overview. |
 | `workspace_overview_max_preview_scale` | float | `0.95` | Maximum preview scale for active-workspace overview, including niri direct overview. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
-| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
-| `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
-| `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
-| `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
 | `one_workspace_per_row` | bool | `0` | Keep each workspace on its own row instead of searching for the best row count. |
 
-### Behavior options
+#### Engine selection and scope overrides
+
+An empty scope override inherits `layout_engine`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
-| `hover_relayout_animation` | string | empty | Hyprland animation leaf used for selected-preview hover relayout, for example `windowsMove`. When set to a valid leaf, Hyprland's animation tree controls speed and supports both bezier and spring curves. Invalid or empty values fall back to `hover_relayout_duration` / `hover_relayout_curve`. |
-| `hover_relayout_duration` | float | `140` | Fallback selected-preview hover relayout duration in milliseconds. Values are clamped to `0` - `2000`; `0` completes immediately. Ignored when `hover_relayout_animation` resolves to a valid Hyprland animation leaf. |
-| `hover_relayout_curve` | string | `ease_out_cubic` | Fallback selected-preview hover relayout easing curve. First tries a Hyprland registered bezier name such as `default`, `linear`, or `easeOutQuint`; otherwise supports `ease_in_cubic`, `ease_out_cubic`, and `ease_in_out_cubic`, with invalid values falling back to `ease_out_cubic`. Ignored when `hover_relayout_animation` is active. |
-| `hover_expand_scale` | float | `1.18` | Preferred selected-preview scale multiplier used by `expand_selected_window`. Values are clamped to `1.0` - `2.0`, and layout bounds may cap the visible result. |
-| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
+| `layout_engine` | string | `grid` | Default geometry solver. `grid` uses row search. `natural`, `apple`, `expose`, and `mission-control` are aliases for the Apple-like natural solver. |
+| `layout_engine_forceall` | string | empty | Engine override for the explicit `forceall` dispatcher scope. Falls back to `layout_engine_all`, then `layout_engine`. |
+| `layout_engine_all` | string | empty | Engine override for the default all-workspace / multi-workspace scope. |
+| `layout_engine_onlycurrentworkspace` | string | empty | Engine override for `onlycurrentworkspace` and default active-workspace scope. |
+
+#### Grid / row-search engine
+
+The natural engine can also use the row-search path as an emergency fallback, so
+these weights still affect that fallback.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
+| `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
+
+#### Natural engine
+
+The natural engine tries to preserve original window positions while removing
+overlap. It attempts every window count before falling back to row search.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `natural_scale_flex` | float | `0.22` | Natural-engine-only free scale range. Values are clamped to `0.0` - `0.25`; recent-first multi-workspace ordering keeps earlier windows visibly larger, while natural layouts may use larger per-window scale differences to fill sparse space. |
+
+### Behavior
+
+#### Workspace scope, ordering, and transitions
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
-| `niri_mode` | bool | `0` | Enable niri-like overflow behavior for the edge workspace strip. This is opt-in and does not turn the strip into the main overview content. |
-| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` movement outside overview. A value of `1.0` maps roughly one `gestures:workspace_swipe_distance` of finger travel to one viewport of scrolling-layout movement. Native `scrollMove` ignores this option. |
-| `niri_workspace_scale` | float | `1.0` | Niri mode strip thumbnail scale inside the configured strip thickness. Values are clamped to `0.05` - `1.0`; `1.0` uses the full strip cross-axis size. |
-| `niri_scrolling_preview_gap` | int | `0` | Extra gap in pixels between niri direct scrolling-layout preview cells along the scrolling axis. In horizontal scrolling layouts this is the horizontal preview gap. |
-| `toggle_switch_mode` | bool | `0` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
-| `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
-| `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
-| `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
 | `show_special` | bool | `0` | Include currently visible special workspaces in the default scope. |
 | `workspace_change_keeps_overview` | bool | `1` | Keep overview open when switching workspaces in active-workspace scope. |
-| `hide_hyprbars_during_overview` | bool | `0` | Suppress drawing of official `hyprbars` title bars while overview renders, without changing their reserved decoration space. This is a no-op unless `hyprbars` is loaded. |
+
+In multi-workspace overview, hover-driven real focus may still cross workspaces,
+but the overview grid stays anchored instead of rebuilding on every workspace
+change. In active-workspace overview, workspace changes use the dedicated
+overview-to-overview transition path.
+
+#### Hover and selection behavior
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
+| `hover_expand_scale` | float | `1.18` | Preferred selected-preview scale multiplier used by `expand_selected_window`. Values are clamped to `1.0` - `2.0`, and layout bounds may cap the visible result. |
+| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
+
+#### Toggle switch behavior
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `toggle_switch_mode` | bool | `0` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
+| `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
+| `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
+
+Toggle switch mode keeps the normal hover semantics: with
+`overview_focus_follows_mouse = 1`, moving the pointer can retarget the final
+selection committed when the modifier is released.
+
+#### Gesture behavior
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
+
+### Animations
+
+#### Hover relayout animation
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `hover_relayout_animation` | string | empty | Hyprland animation leaf used for selected-preview hover relayout, for example `windowsMove`. When set to a valid leaf, Hyprland's animation tree controls speed and supports both bezier and spring curves. Invalid or empty values fall back to `hover_relayout_duration` / `hover_relayout_curve`. |
+| `hover_relayout_duration` | float | `140` | Fallback selected-preview hover relayout duration in milliseconds. Values are clamped to `0` - `2000`; `0` completes immediately. Ignored when `hover_relayout_animation` resolves to a valid Hyprland animation leaf. |
+| `hover_relayout_curve` | string | `ease_out_cubic` | Fallback selected-preview hover relayout easing curve. First tries a Hyprland registered bezier name such as `default`, `linear`, or `easeOutQuint`; otherwise supports `ease_in_cubic`, `ease_out_cubic`, and `ease_in_out_cubic`, with invalid values falling back to `ease_out_cubic`. Ignored when `hover_relayout_animation` is active. |
+
+### Niri mode
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `niri_mode` | bool | `0` | Enable niri-like overflow behavior for the edge workspace strip. This is opt-in and does not turn the strip into the main overview content. |
+| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` movement outside overview. A value of `1.0` maps roughly one `gestures:workspace_swipe_distance` of finger travel to one viewport of scrolling-layout movement. Native `scrollMove` ignores this option. |
+| `niri_workspace_scale` | float | `1.0` | Niri mode strip thumbnail scale inside the configured strip thickness. Values are clamped to `0.05` - `1.0`; `1.0` uses the full strip cross-axis size. |
+| `niri_scrolling_preview_gap` | int | `0` | Extra gap in pixels between niri direct scrolling-layout preview cells along the scrolling axis. In horizontal scrolling layouts this is the horizontal preview gap. |
+
+With `niri_mode = 1`, the strip stays in the configured edge band and the main
+overview remains the scaled window overview. The strip uses monitor-aspect
+workspace thumbnails, centers the active workspace on open, and allows the
+thumbnail list to overflow instead of shrinking every workspace into view.
+Tiled `scrolling` layout previews use `workspace_overview_max_preview_scale` on
+the non-scrolling axis and may overflow along the scrolling axis, so gesture
+panning moves the centered row or column. Both `hymission:scroll,layout` and Lua
+`scroll_move` can scroll the layout inside the niri overview; workspace switching
+continues to use `hl.plugin.hymission.gesture({ ..., action = "workspace" })`.
+
+### Label picking
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
 | `pick_labels_enabled` | bool | `0` | Show keyboard pick labels on previews and enable direct keyboard selection in the configured `pick_labels_mode`. Reuses `close_button_color` / `close_button_glyph_color` / `close_button_size` for styling; previews too small for a legible chip skip drawing it but remain selectable. |
 | `pick_labels_mode` | string | `sequential` | `sequential` keeps the numbered `1`-`9`, `A1`-`Z9` scheme. `spatial` maps the physical ANSI alphanumeric block to preview centers across the participating monitors. Up to 36 windows receive distinct single-key labels; denser layouts share a primary key and show a two-key route such as `FF` or `FR`. |
 | `pick_labels_direct_activate` | bool | `0` | Only applies when `pick_labels_enabled = 1`. `0` only moves the selection (still requires `Return` to confirm, same as arrow keys); `1` activates and closes overview immediately when a pick label is hit. |
 
-Behavior notes:
-
-- In multi-workspace overview, hover-driven real focus may still cross workspaces, but the overview grid stays anchored instead of rebuilding on every workspace change.
-- In active-workspace overview, workspace changes still use the dedicated overview-to-overview transition path.
-- Toggle switch mode keeps current hover semantics: if `overview_focus_follows_mouse = 1`, moving the pointer can still retarget the final committed selection during the switch session.
 - In `sequential` mode, past the 9th window a letter key (`A`-`Z`) arms a ~1.5s prefix waiting for its digit (e.g. `A` then `2` picks `A2`); any other key cancels the prefix without losing its own normal effect (e.g. `Esc` still closes overview).
 - In `spatial` mode, key positions and activation use physical keycodes, while badge text follows the active keyboard's current XKB layout automatically (using its unshifted level, so Shift/Caps Lock do not change the badge). A shared primary waits up to ~1.5s for the same key (center) or an adjacent key in the labelled direction; equivalent adjacent keys in that direction are also accepted.
 
-### Appearance options
-
-Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
+### Window decorations and controls
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `backdrop_color` | color | `rgba(00000000)` | Optional full-monitor overview backdrop tint. Keep transparent for blur without dimming. |
+| `window_decoration_enabled` | bool | `1` | Preserve eligible window borders and shadows on overview previews. This does not control Hymission's label chips or close buttons. |
+| `close_button_enabled` | bool | `0` | Show a clickable close button on eligible window previews. |
+| `close_button_size` | int | `18` | Close-button size in logical pixels. Also supplies the label-chip font-size scale. Values below `8` are clamped. |
+| `close_button_inset` | int | `0` | Additional inset applied to the close-button position. |
+
+### Appearance
+
+#### General appearance
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
 | `backdrop_blur` | bool | `0` | Blur the full-monitor overview backdrop. |
-| `focus_hover_color` | color | `rgba(f2f7ff8c)` | Hover focus outline color. |
-| `focus_selected_color` | color | `rgba(3dc7fff2)` | Selected focus outline color. |
-| `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |
 | `focus_hover_thickness` | float | `2` | Hover focus outline thickness. |
 | `focus_selected_thickness` | float | `4` | Selected focus outline thickness. |
-| `close_button_color` | color | `rgba(29292eeb)` | Close button idle fill color. |
-| `close_button_hover_color` | color | `rgba(f24d47f2)` | Close button hover fill color. |
-| `close_button_glyph_color` | color | `rgba(fffffffa)` | Close button glyph color. |
 
-### Workspace strip options
+### Workspace strip and bar
+
+#### Workspace strip behavior and geometry
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -427,6 +531,58 @@ Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
 | `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
+
+The workspace strip is shown when the current overview scope displays only the
+active workspace. By default it only shows real workspaces plus the trailing
+new-workspace card. In `continuous` mode, synthetic empty workspaces progressively
+expose numbered gaps one slot at a time and render the monitor
+background/wallpaper when available.
+
+#### Bar integration
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `hide_bar_when_strip` | bool | `1` | Replace matching exclusive bars with a short self-blur / slide / scale proxy handoff while the strip is shown. |
+| `hide_hyprbars_during_overview` | bool | `0` | Suppress drawing of official `hyprbars` title bars while overview renders, without changing their reserved decoration space. This is a no-op unless `hyprbars` is loaded. |
+| `bar_single_mission_control` | bool | `0` | Multi-workspace overview only. Keep this at `0` to preserve the bar's normal numbered workspace display. When enabled, the bar workspace list collapses to a single `Mission Control` entry and the other regular overview workspaces are renamed to an internal hidden prefix so bars can filter them out. Intended for Waybar `ignore-workspaces`. |
+
+#### Bar handoff animation
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `hide_bar_animation` | bool | `1` | Enable the bar handoff animation. When disabled, matching bars hide/show instantly with the strip. |
+| `hide_bar_animation_blur` | bool | `1` | Enable blur during the bar handoff. When disabled, the handoff keeps alpha / move / scale only. |
+| `hide_bar_animation_move_multiplier` | float | `0.8` | Multiplier for how much the bar follows strip movement. Clamped to `0.0` - `2.0`. `1.0` matches full strip travel and `2.0` doubles it. |
+| `hide_bar_animation_scale_divisor` | float | `1.1` | Bar scale divisor at full strip reveal. A value of `n` means the proxy scales to `1 / n` of its original size at maximum. `1.0` disables scaling. |
+| `hide_bar_animation_alpha_end` | float | `0.0` | Final bar proxy alpha when the strip is fully revealed. Clamped to `0.0` - `1.0`. `0.0` fully fades out; higher values keep part of the bar visible. |
+
+### Color customization
+
+Color values below use Hyprland `rgba(rrggbbaa)` syntax.
+
+#### Overview, focus, and title
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `backdrop_color` | color | `rgba(00000000)` | Optional full-monitor overview backdrop tint. Keep transparent for blur without dimming. |
+| `focus_hover_color` | color | `rgba(f2f7ff8c)` | Hover focus outline color. |
+| `focus_selected_color` | color | `rgba(3dc7fff2)` | Selected focus outline color. |
+| `focus_title_color` | color | `rgba(ffffffff)` | Selected window title text color. |
+
+#### Window controls and label chips
+
+Label chips reuse the close-button background, glyph, and size settings.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `close_button_color` | color | `rgba(29292eeb)` | Close button idle fill and label-chip background color. |
+| `close_button_hover_color` | color | `rgba(f24d47f2)` | Close button hover fill color. |
+| `close_button_glyph_color` | color | `rgba(fffffffa)` | Close button glyph and label-chip text color. |
+
+#### Workspace strip colors
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
 | `workspace_strip_background_color` | color | `rgba(0812243d)` | Strip band background color. |
 | `workspace_strip_inactive_color` | color | `rgba(0d17262e)` | Inactive workspace card fill. |
 | `workspace_strip_active_color` | color | `rgba(1a2e523d)` | Active workspace card fill. |
@@ -436,17 +592,6 @@ Color options use Hyprland color syntax such as `rgba(rrggbbaa)`.
 | `workspace_strip_active_tint_color` | color | `rgba(5794f21a)` | Tint drawn over the active workspace thumbnail. |
 | `workspace_strip_inactive_tint_color` | color | `rgba(00000000)` | Tint drawn over inactive workspace thumbnails. Defaults to transparent. |
 | `workspace_strip_plus_color` | color | `rgba(f7fbffe0)` | Plus glyph color for the new-workspace card. |
-| `hide_bar_when_strip` | bool | `1` | Replace matching exclusive bars with a short self-blur / slide / scale proxy handoff while the strip is shown. |
-| `hide_bar_animation` | bool | `1` | Enable the bar handoff animation. When disabled, matching bars hide/show instantly with the strip. |
-| `hide_bar_animation_blur` | bool | `1` | Enable blur during the bar handoff. When disabled, the handoff keeps alpha / move / scale only. |
-| `hide_bar_animation_move_multiplier` | float | `0.8` | Multiplier for how much the bar follows strip movement. Clamped to `0.0` - `2.0`. `1.0` matches full strip travel and `2.0` doubles it. |
-| `hide_bar_animation_scale_divisor` | float | `1.1` | Bar scale divisor at full strip reveal. A value of `n` means the proxy scales to `1 / n` of its original size at maximum. `1.0` disables scaling. |
-| `hide_bar_animation_alpha_end` | float | `0.0` | Final bar proxy alpha when the strip is fully revealed. Clamped to `0.0` - `1.0`. `0.0` fully fades out; higher values keep part of the bar visible. |
-| `bar_single_mission_control` | bool | `0` | Multi-workspace overview only. Keep this at `0` to preserve the bar's normal numbered workspace display. When enabled, the bar workspace list collapses to a single `Mission Control` entry and the other regular overview workspaces are renamed to an internal hidden prefix so bars can filter them out. Intended for Waybar `ignore-workspaces`. |
-
-The workspace strip is shown when the current overview scope displays only the active workspace.
-By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
-With `niri_mode = 1`, the strip stays in the configured edge band and the main overview remains the scaled window overview. The strip uses monitor-aspect workspace thumbnails, centers the active workspace on open, and allows the thumbnail list to overflow instead of shrinking every workspace into view. Tiled `scrolling` layout previews use `workspace_overview_max_preview_scale` on the non-scrolling axis and may overflow along the scrolling axis, so gesture panning moves the centered row/column instead of shrinking the whole tape into view. Both `hymission:scroll,layout` and Lua `scroll_move` can scroll the `scrolling` layout inside the niri overview; workspace switching continues to use `hl.plugin.hymission.gesture({ ..., action = "workspace" })`.
 
 ### Optional Waybar Single-Entry Setup
 
