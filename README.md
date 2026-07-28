@@ -132,7 +132,6 @@ configuration.
 | `hl.plugin.hymission.close()` | `hymission:close` | None | Ensures overview is closed. Calling it while overview is already inactive or closing is a no-op. | Gives cancellation paths, scripts, and integrations a deterministic “leave overview” operation without the risk that `toggle` opens it. |
 | `hl.plugin.hymission.debug_current_layout()` | `hymission:debug_current_layout` | None | Computes the default-scope layout and shows a notification containing the preview count and up to three preview rectangles, without entering overview. | Started as the layout-prototype entry point and remains a low-risk way to verify window collection and layout geometry without taking over input or rendering overview. |
 
-! Notice that you may only start the sapture by dispatcher, if you start hyprcapture-ui manually, it may not work correctly.
 #### Scope arguments
 
 | Argument | Accepted by | Meaning |
